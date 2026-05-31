@@ -1,0 +1,21 @@
+{
+  "name": "tonalli-faucet",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Faucet full-stack para onboarding de Tonalli Wallet con eCash/XEC y gate RMZ.",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
