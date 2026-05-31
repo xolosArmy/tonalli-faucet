@@ -238,8 +238,8 @@ export default function App() {
         {claimState.kind === "success" && (
           <div className="notice success">
             <p>Claim enviado. Claim #{claimState.claimCount}</p>
-            <a href={`https://explorer.e.cash/tx/${claimState.txid}`} target="_blank" rel="noreferrer">
-              Ver txid
+            <a href={`https://explorer.xolosarmy.xyz/tx/${claimState.txid}`} target="_blank" rel="noreferrer">
+              Ver transacción en Xolos Explorer
             </a>
           </div>
         )}
