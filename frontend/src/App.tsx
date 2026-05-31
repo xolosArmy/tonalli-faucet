@@ -1,5 +1,5 @@
 import QRCodeModal from "@walletconnect/qrcode-modal";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { claimFaucet, getFaucetStatus, type FaucetStatus } from "./api/faucet.js";
 import { connectTonalliWallet, disconnectTonalliWallet } from "./walletconnect/client.js";
 
@@ -45,7 +45,11 @@ export default function App() {
   const [claimState, setClaimState] = useState<ClaimState>({ kind: "idle" });
   const [connectionState, setConnectionState] = useState<ConnectionState>({ kind: "idle" });
   const [walletUri, setWalletUri] = useState<string | null>(null);
+  const [manualWalletUri, setManualWalletUri] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "manual">("idle");
   const [isMobile] = useState(() => isMobileUserAgent(window.navigator.userAgent));
+  const qrCloseShouldResetRef = useRef(false);
+  const qrClosedWithoutConnectionRef = useRef(false);
 
   const walletDeepLink = walletUri ? `tonalli://wc?uri=${encodeURIComponent(walletUri)}` : null;
   const connectionStatus = connectionLabel(connectionState);
@@ -63,32 +67,73 @@ export default function App() {
 
   async function onConnect() {
     setWalletUri(null);
+    setManualWalletUri(null);
+    setCopyState("idle");
     setAddress("");
     setClaimState({ kind: "idle" });
     setConnectionState({ kind: "connecting" });
+    qrCloseShouldResetRef.current = false;
+    qrClosedWithoutConnectionRef.current = false;
 
     try {
       const connectedAddress = await connectTonalliWallet((uri) => {
         setWalletUri(uri);
+        setManualWalletUri(null);
+        setCopyState("idle");
+        qrCloseShouldResetRef.current = true;
+
+        QRCodeModal.open(uri, () => {
+          if (!qrCloseShouldResetRef.current) return;
+          qrClosedWithoutConnectionRef.current = true;
+          qrCloseShouldResetRef.current = false;
+          setWalletUri(null);
+          setManualWalletUri(null);
+          setCopyState("idle");
+          setConnectionState({ kind: "idle" });
+        });
+
         if (isMobile) {
           setConnectionState({ kind: "openWallet" });
           return;
         }
 
         setConnectionState({ kind: "waiting" });
-        QRCodeModal.open(uri, () => undefined);
       });
 
+      qrCloseShouldResetRef.current = false;
       QRCodeModal.close();
       setAddress(connectedAddress);
       setWalletUri(null);
+      setManualWalletUri(null);
+      setCopyState("idle");
       setConnectionState({ kind: "connected" });
     } catch (error) {
+      qrCloseShouldResetRef.current = false;
       QRCodeModal.close();
+      if (qrClosedWithoutConnectionRef.current) {
+        setWalletUri(null);
+        setManualWalletUri(null);
+        setCopyState("idle");
+        setConnectionState({ kind: "idle" });
+        return;
+      }
       setConnectionState({
         kind: "error",
         message: error instanceof Error ? error.message : "No se pudo conectar wallet."
       });
+    }
+  }
+
+  async function onCopyWalletUri() {
+    if (!walletUri) return;
+
+    try {
+      await navigator.clipboard.writeText(walletUri);
+      setManualWalletUri(null);
+      setCopyState("copied");
+    } catch {
+      setManualWalletUri(walletUri);
+      setCopyState("manual");
     }
   }
 
@@ -136,10 +181,27 @@ export default function App() {
           Conectar Tonalli Wallet
         </button>
 
-        {walletDeepLink && connectionState.kind === "openWallet" && (
-          <a className="walletLink" href={walletDeepLink}>
-            Abrir Tonalli Wallet
-          </a>
+        {isMobile && walletUri && walletDeepLink && connectionState.kind === "openWallet" && (
+          <div className="walletConnectHelp">
+            <div className="walletConnectActions">
+              <a className="walletLink" href={walletDeepLink}>
+                Abrir Tonalli Wallet
+              </a>
+              <button className="secondaryButton" type="button" onClick={onCopyWalletUri}>
+                Copiar URI WalletConnect
+              </button>
+            </div>
+            <p>Si el boton no abre Tonalli, copia el URI y pegalo en WalletConnect dentro de Tonalli.</p>
+            {copyState === "copied" && <span className="copyStatus">URI copiado.</span>}
+            {copyState === "manual" && (
+              <textarea
+                className="walletUriTextarea"
+                value={manualWalletUri ?? walletUri}
+                readOnly
+                aria-label="URI WalletConnect"
+              />
+            )}
+          </div>
         )}
 
         {connectionStatus && (

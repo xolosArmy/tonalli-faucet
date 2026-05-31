@@ -61,6 +61,7 @@ export async function connectTonalliWallet(onUri: (uri: string) => void): Promis
   });
 
   if (uri) {
+    // SignClient returns the complete wc:<topic>@2?... pairing URI; pass it through unchanged.
     onUri(uri);
   }
 
