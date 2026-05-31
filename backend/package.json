@@ -7,6 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "fanout:dry-run": "tsx src/scripts/fanout.ts --dry-run --count 100 --amount 1000 --label tonalli-faucet-fanout",
+    "fanout": "tsx src/scripts/fanout.ts --count 100 --amount 1000 --label tonalli-faucet-fanout",
+    "wallet:status": "tsx src/scripts/faucetWalletStatus.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

@@ -68,6 +68,28 @@ Rate limits de claim:
 
 La verificacion de segundo claim consulta Xolos Chronik en `https://chronik.xolosarmy.xyz` y requiere al menos 1 Xolos RMZ con token ID `c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908`. `https://chronik.e.cash` puede usarse solo como fallback operativo si se configura explicitamente y soporta los mismos datos de token.
 
+## Preparar UTXOs antes de un evento
+
+Para activaciones presenciales puede haber varios reclamos casi simultaneos. Antes del evento conviene hacer fan-out de la wallet del nodo Bitcoin ABC/eCash: dividir el saldo disponible en muchas salidas pequenas para que `sendtoaddress` tenga UTXOs listos y reduzca problemas operativos por change outputs o gasto de salidas grandes.
+
+Flujo recomendado:
+
+```bash
+npm run wallet:status --workspace backend
+npm run fanout:dry-run --workspace backend
+npm run fanout --workspace backend
+```
+
+`fanout:dry-run` muestra el plan sin crear direcciones ni enviar fondos. `fanout` pide confirmacion explicita escribiendo exactamente `CONFIRM FANOUT`, crea direcciones nuevas con el label operativo y llama `sendmany` desde la wallet del nodo. Despues del fan-out, espera al menos 1 confirmacion antes de activar la faucet y revisa el resultado con `wallet:status`.
+
+Recomendaciones operativas:
+
+- Usa una wallet separada para la faucet.
+- Fondea solo lo necesario para el evento.
+- Ejemplo: 100 UTXOs x 1000 XEC = 100,000 XEC. Si el claim es de 500 XEC, eso permite operar con margen.
+- Durante preparacion usa `FAUCET_ENABLED=false`.
+- Durante el evento usa `FAUCET_ENABLED=true`.
+
 ## Seguridad
 
 - Usa una wallet separada para la faucet con saldo limitado. No uses tesoreria principal.
