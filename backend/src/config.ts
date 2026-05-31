@@ -21,6 +21,13 @@ function optional(name: string, fallback: string): string {
   return value && value.trim() !== "" ? value : fallback;
 }
 
+function listEnv(name: string, fallback: string): string[] {
+  return optional(name, fallback)
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function numberEnv(name: string, fallback: number): number {
   const raw = optional(name, String(fallback));
   const parsed = Number(raw);
@@ -38,7 +45,7 @@ function boolEnv(name: string, fallback: boolean): boolean {
 export const config = {
   port: numberEnv("PORT", 3001),
   nodeEnv: optional("NODE_ENV", "development"),
-  corsOrigin: optional("CORS_ORIGIN", "http://localhost:5173"),
+  corsOrigins: listEnv("CORS_ORIGIN", "http://localhost:5173"),
   sqlitePath: optional("SQLITE_PATH", "./data/faucet.sqlite"),
   claimAmountXec: optional("CLAIM_AMOUNT_XEC", "500"),
   maxClaimsWithoutRmz: numberEnv("MAX_CLAIMS_WITHOUT_RMZ", 1),

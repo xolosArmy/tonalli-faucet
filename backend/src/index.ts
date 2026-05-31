@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import type { CorsOptions } from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { config, isProduction } from "./config.js";
@@ -9,11 +10,20 @@ import { statusRouter } from "./routes/status.js";
 import { AppError, errorMessage } from "./utils/errors.js";
 
 const app = express();
+const corsOptions: CorsOptions = {
+  origin(origin, callback) {
+    if (!origin || config.corsOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error("CORS origin not allowed"));
+  }
+};
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
 app.use(helmet());
-app.use(cors({ origin: config.corsOrigin }));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "32kb" }));
 
 app.use(rateLimit({

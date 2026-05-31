@@ -23,10 +23,10 @@ La regla principal es:
 ```bash
 npm install
 cp .env.example backend/.env
-cp .env.example frontend/.env
+cp frontend/.env.example frontend/.env
 ```
 
-La configuracion base usa `RMZ_TOKEN_ID=c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908` y `CHRONIK_URL=https://chronik.xolosarmy.xyz`. Edita `backend/.env` con credenciales RPC, `IP_HASH_SECRET` y la configuracion de evento. Edita `frontend/.env` con `VITE_API_BASE_URL` y `VITE_WALLETCONNECT_PROJECT_ID`.
+La configuracion base usa `RMZ_TOKEN_ID=c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908` y `CHRONIK_URL=https://chronik.xolosarmy.xyz`. Edita `backend/.env` con credenciales RPC, `IP_HASH_SECRET` y la configuracion de evento. Edita `frontend/.env` con `VITE_FAUCET_API_URL` y `VITE_WALLETCONNECT_PROJECT_ID`.
 
 ## Correr
 
@@ -37,6 +37,95 @@ npm run dev
 Backend: `http://localhost:3001`
 
 Frontend: `http://localhost:5173`
+
+## Deployment
+
+### Frontend en Vercel
+
+El frontend se despliega separado del backend. En Vercel configura el proyecto apuntando al repositorio con estos valores:
+
+- Root Directory: `frontend`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+- Variable de entorno: `VITE_FAUCET_API_URL=https://api-faucet.tonalli.cash`
+
+Comandos utiles para preparar y validar el build local antes de desplegar:
+
+```bash
+npm install
+npm run build --workspace frontend
+```
+
+Con Vercel CLI, desde el root del repositorio:
+
+```bash
+cd frontend
+vercel link
+vercel env add VITE_FAUCET_API_URL production
+vercel deploy --prod
+```
+
+El valor de `VITE_FAUCET_API_URL` debe apuntar al backend publico en VPS, no a Vercel.
+
+### Backend en VPS
+
+El backend no debe desplegarse en Vercel: mantiene estado local en SQLite, necesita conectividad segura hacia Bitcoin ABC RPC y usa procesos de larga vida. Despliegalo en un VPS detras de HTTPS, por ejemplo con Nginx/Caddy como reverse proxy hacia `localhost:3001`.
+
+El backend necesita acceso seguro a:
+
+- Bitcoin ABC RPC, preferentemente por red privada, firewall o tunel seguro.
+- SQLite en una ruta persistente y respaldada, configurada con `SQLITE_PATH`.
+- Chronik por `CHRONIK_URL`.
+- Variables reales en `backend/.env`, nunca en el frontend ni en el repositorio.
+
+Configura CORS con el dominio final de Vercel o el dominio temporal de preview. `CORS_ORIGIN` acepta una lista separada por comas:
+
+```env
+CORS_ORIGIN=https://faucet.tonalli.cash,https://tonalli-faucet.vercel.app
+```
+
+Comandos base en el VPS:
+
+```bash
+git clone https://github.com/xolosArmy/tonalli-faucet.git
+cd tonalli-faucet
+npm install
+cp .env.example backend/.env
+# Edita backend/.env con secretos reales, rutas persistentes y CORS_ORIGIN.
+npm run build --workspace backend
+npm run start --workspace backend
+```
+
+Ejemplo con PM2:
+
+```bash
+npm install -g pm2
+pm2 start dist/index.js --name tonalli-faucet-api --cwd /opt/tonalli-faucet/backend
+pm2 save
+pm2 startup
+```
+
+Ejemplo con systemd:
+
+```ini
+[Unit]
+Description=Tonalli Faucet API
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tonalli-faucet/backend
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/tonalli-faucet/backend/.env
+ExecStart=/usr/bin/node /opt/tonalli-faucet/backend/dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`FAUCET_ENABLED=false` es recomendable mientras preparas wallet, UTXOs, DNS, TLS y reverse proxy. Activalo solo cuando hayas verificado `GET /api/v1/status` desde el dominio del frontend.
 
 ## Probar
 
