@@ -6,7 +6,7 @@ La regla principal es:
 
 - El primer claim por direccion eCash es libre.
 - A partir del segundo claim, el backend verifica que la direccion tenga al menos 1 RMZ.
-- El backend valida direccion, codigo de evento, historial, rate limits, gate RMZ y envio RPC. No confia solo en el frontend.
+- El backend valida direccion, codigo de evento, historial, rate limits por red y por direccion, gate RMZ y envio RPC. No confia solo en el frontend.
 
 ## Flujo del usuario
 
@@ -59,6 +59,11 @@ Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled` y `claimAmountXec`.
 }
 ```
 
+Rate limits de claim:
+
+- `IP_CLAIM_LIMIT_WINDOW_MS=3600000` y `IP_CLAIM_LIMIT_MAX=5` limitan los reclamos por IP antes de validar la combinacion IP:direccion.
+- `RATE_LIMIT_WINDOW_MS` y `RATE_LIMIT_MAX` mantienen el limiter existente por combinacion IP:direccion.
+
 ## Chronik y RMZ
 
 La verificacion de segundo claim consulta Xolos Chronik en `https://chronik.xolosarmy.xyz` y requiere al menos 1 Xolos RMZ con token ID `c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908`. `https://chronik.e.cash` puede usarse solo como fallback operativo si se configura explicitamente y soporta los mismos datos de token.
@@ -68,6 +73,7 @@ La verificacion de segundo claim consulta Xolos Chronik en `https://chronik.xolo
 - Usa una wallet separada para la faucet con saldo limitado. No uses tesoreria principal.
 - Mantén `EVENT_CODE_REQUIRED=true` en activaciones presenciales.
 - No guardes IP cruda; el backend guarda HMAC-SHA256 con `IP_HASH_SECRET`.
+- El rate limit global por IP se aplica en memoria antes del limiter por direccion y no persiste IP cruda en base de datos.
 - No expongas credenciales RPC ni secretos en frontend.
 - Si `FAUCET_ENABLED=false`, el backend rechaza claims.
 - Si Chronik no responde, no se permite un segundo claim.

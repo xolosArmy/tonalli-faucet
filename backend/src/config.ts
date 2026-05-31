@@ -46,6 +46,8 @@ export const config = {
   eventCode: optional("EVENT_CODE", "TONALLI-CU"),
   rateLimitWindowMs: numberEnv("RATE_LIMIT_WINDOW_MS", 900000),
   rateLimitMax: numberEnv("RATE_LIMIT_MAX", 20),
+  ipClaimLimitWindowMs: numberEnv("IP_CLAIM_LIMIT_WINDOW_MS", 3600000),
+  ipClaimLimitMax: numberEnv("IP_CLAIM_LIMIT_MAX", 5),
   addressCooldownHours: numberEnv("ADDRESS_COOLDOWN_HOURS", 24),
   rmzTokenId: optional("RMZ_TOKEN_ID", DEFAULT_RMZ_TOKEN_ID),
   chronikUrl: optional("CHRONIK_URL", DEFAULT_CHRONIK_URL),

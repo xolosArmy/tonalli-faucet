@@ -9,3 +9,6 @@ coverage/
 backend/data/
 *.sqlite
 *.sqlite-journal
+dist/
+frontend/dist/
+backend/dist/

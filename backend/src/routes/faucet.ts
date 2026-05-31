@@ -10,6 +10,14 @@ import { hashIp } from "../utils/ipHash.js";
 
 export const faucetRouter = Router();
 
+const ipClaimLimiter = rateLimit({
+  windowMs: config.ipClaimLimitWindowMs,
+  limit: config.ipClaimLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Límite de reclamos por red alcanzado. Intenta más tarde." }
+});
+
 const addressLimiter = rateLimit({
   windowMs: config.rateLimitWindowMs,
   limit: config.rateLimitMax,
@@ -39,7 +47,7 @@ function assertCooldown(lastClaimAt: string | null): void {
   }
 }
 
-faucetRouter.post("/claim", addressLimiter, async (req, res, next) => {
+faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, next) => {
   const now = new Date().toISOString();
   const ipHash = hashIp(req.ip ?? "unknown");
   const userAgent = req.get("user-agent") ?? "";

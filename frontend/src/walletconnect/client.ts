@@ -1,9 +1,9 @@
 import SignClient from "@walletconnect/sign-client";
-import QRCodeModal from "@walletconnect/qrcode-modal";
 
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID;
 
 let clientPromise: Promise<SignClient> | null = null;
+let activeSession: { topic: string } | null = null;
 
 function getClient(): Promise<SignClient> {
   if (!projectId) {
@@ -40,7 +40,12 @@ function firstEcashAddress(value: unknown): string | null {
   return null;
 }
 
-export async function connectTonalliWallet(): Promise<string> {
+function ecashAddressFromAccount(account: string): string | null {
+  const address = account.split(":").slice(2).join(":");
+  return address.startsWith("ecash:") ? address : null;
+}
+
+export async function connectTonalliWallet(onUri: (uri: string) => void): Promise<string> {
   const client = await getClient();
 
   // Ajustar chains/methods si Tonalli Wallet publica otro namespace CAIP-2 para eCash.
@@ -56,35 +61,44 @@ export async function connectTonalliWallet(): Promise<string> {
   });
 
   if (uri) {
-    QRCodeModal.open(uri, () => undefined);
+    onUri(uri);
   }
 
-  try {
-    const session = await approval();
-    QRCodeModal.close();
+  const session = await approval();
+  activeSession = session;
 
-    const accountAddress = session.namespaces.ecash?.accounts
-      ?.map((account) => account.split(":").at(-1))
-      .find((account) => account?.startsWith("ecash:"));
-    if (accountAddress) return accountAddress;
+  const accountAddress = session.namespaces.ecash?.accounts?.map(ecashAddressFromAccount).find(Boolean);
+  if (accountAddress) return accountAddress;
 
-    const topic = session.topic;
-    const chainId = session.namespaces.ecash?.chains?.[0] ?? "ecash:mainnet";
-    const result = await client.request({
-      topic,
-      chainId,
-      request: {
-        method: "ecash_getAddresses",
-        params: {}
-      }
-    });
-
-    const address = firstEcashAddress(result);
-    if (!address) {
-      throw new Error("Tonalli Wallet no devolvio una direccion eCash.");
+  const topic = session.topic;
+  const chainId = session.namespaces.ecash?.chains?.[0] ?? "ecash:mainnet";
+  const result = await client.request({
+    topic,
+    chainId,
+    request: {
+      method: "ecash_getAddresses",
+      params: {}
     }
-    return address;
-  } finally {
-    QRCodeModal.close();
+  });
+
+  const address = firstEcashAddress(result);
+  if (!address) {
+    throw new Error("Tonalli Wallet no devolvio una direccion eCash.");
   }
+  return address;
+}
+
+export async function disconnectTonalliWallet(): Promise<void> {
+  if (!activeSession) return;
+
+  const client = await getClient();
+  const session = activeSession;
+  activeSession = null;
+  await client.disconnect({
+    topic: session.topic,
+    reason: {
+      code: 6000,
+      message: "Claim completado"
+    }
+  });
 }

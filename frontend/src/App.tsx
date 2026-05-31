@@ -1,6 +1,7 @@
+import QRCodeModal from "@walletconnect/qrcode-modal";
 import { FormEvent, useEffect, useState } from "react";
 import { claimFaucet, getFaucetStatus, type FaucetStatus } from "./api/faucet.js";
-import { connectTonalliWallet } from "./walletconnect/client.js";
+import { connectTonalliWallet, disconnectTonalliWallet } from "./walletconnect/client.js";
 
 type ClaimState =
   | { kind: "idle" }
@@ -8,11 +9,51 @@ type ClaimState =
   | { kind: "success"; txid: string; claimCount: number }
   | { kind: "error"; message: string };
 
+type ConnectionState =
+  | { kind: "idle" }
+  | { kind: "connecting" }
+  | { kind: "waiting" }
+  | { kind: "openWallet" }
+  | { kind: "connected" }
+  | { kind: "error"; message: string };
+
+function isMobileUserAgent(userAgent: string): boolean {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+}
+
+function connectionLabel(state: ConnectionState): string | null {
+  switch (state.kind) {
+    case "connecting":
+      return "Conectando";
+    case "waiting":
+      return "Esperando conexion";
+    case "openWallet":
+      return "Abre Tonalli Wallet";
+    case "connected":
+      return "Direccion conectada";
+    case "error":
+      return "Error";
+    default:
+      return null;
+  }
+}
+
 export default function App() {
   const [address, setAddress] = useState("");
   const [eventCode, setEventCode] = useState("TONALLI-CU");
   const [status, setStatus] = useState<FaucetStatus | null>(null);
   const [claimState, setClaimState] = useState<ClaimState>({ kind: "idle" });
+  const [connectionState, setConnectionState] = useState<ConnectionState>({ kind: "idle" });
+  const [walletUri, setWalletUri] = useState<string | null>(null);
+  const [isMobile] = useState(() => isMobileUserAgent(window.navigator.userAgent));
+
+  const walletDeepLink = walletUri ? `tonalli://wc?uri=${encodeURIComponent(walletUri)}` : null;
+  const connectionStatus = connectionLabel(connectionState);
+  const isBusy =
+    claimState.kind === "loading" ||
+    connectionState.kind === "connecting" ||
+    connectionState.kind === "waiting" ||
+    connectionState.kind === "openWallet";
 
   useEffect(() => {
     getFaucetStatus()
@@ -21,13 +62,33 @@ export default function App() {
   }, []);
 
   async function onConnect() {
-    setClaimState({ kind: "loading", message: "Conectando Tonalli Wallet..." });
+    setWalletUri(null);
+    setAddress("");
+    setClaimState({ kind: "idle" });
+    setConnectionState({ kind: "connecting" });
+
     try {
-      const connectedAddress = await connectTonalliWallet();
+      const connectedAddress = await connectTonalliWallet((uri) => {
+        setWalletUri(uri);
+        if (isMobile) {
+          setConnectionState({ kind: "openWallet" });
+          return;
+        }
+
+        setConnectionState({ kind: "waiting" });
+        QRCodeModal.open(uri, () => undefined);
+      });
+
+      QRCodeModal.close();
       setAddress(connectedAddress);
-      setClaimState({ kind: "idle" });
+      setWalletUri(null);
+      setConnectionState({ kind: "connected" });
     } catch (error) {
-      setClaimState({ kind: "error", message: error instanceof Error ? error.message : "No se pudo conectar wallet." });
+      QRCodeModal.close();
+      setConnectionState({
+        kind: "error",
+        message: error instanceof Error ? error.message : "No se pudo conectar wallet."
+      });
     }
   }
 
@@ -39,6 +100,9 @@ export default function App() {
       setClaimState({ kind: "success", txid: result.txid, claimCount: result.claimCount });
       const nextStatus = await getFaucetStatus();
       setStatus(nextStatus);
+      await disconnectTonalliWallet().catch((error) => {
+        console.warn("No se pudo desconectar WalletConnect despues del claim", error);
+      });
     } catch (error) {
       setClaimState({ kind: "error", message: error instanceof Error ? error.message : "No se pudo completar el claim." });
     }
@@ -68,9 +132,22 @@ export default function App() {
           </div>
         </div>
 
-        <button className="primaryButton" type="button" onClick={onConnect} disabled={claimState.kind === "loading"}>
+        <button className="primaryButton" type="button" onClick={onConnect} disabled={isBusy}>
           Conectar Tonalli Wallet
         </button>
+
+        {walletDeepLink && connectionState.kind === "openWallet" && (
+          <a className="walletLink" href={walletDeepLink}>
+            Abrir Tonalli Wallet
+          </a>
+        )}
+
+        {connectionStatus && (
+          <div className={`notice connection ${connectionState.kind === "error" ? "error" : "loading"}`}>
+            <p>{connectionStatus}</p>
+            {connectionState.kind === "error" && <span>{connectionState.message}</span>}
+          </div>
+        )}
 
         {address && (
           <div className="addressBox">
@@ -89,7 +166,7 @@ export default function App() {
             autoCapitalize="characters"
           />
 
-          <button className="claimButton" type="submit" disabled={!address || claimState.kind === "loading"}>
+          <button className="claimButton" type="submit" disabled={!address || isBusy}>
             Recibir XEC
           </button>
         </form>
@@ -98,7 +175,7 @@ export default function App() {
         {claimState.kind === "error" && <p className="notice error">{claimState.message}</p>}
         {claimState.kind === "success" && (
           <div className="notice success">
-            <p>Claim completado. Claim #{claimState.claimCount}</p>
+            <p>Claim enviado. Claim #{claimState.claimCount}</p>
             <a href={`https://explorer.e.cash/tx/${claimState.txid}`} target="_blank" rel="noreferrer">
               Ver txid
             </a>
