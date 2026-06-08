@@ -35,6 +35,8 @@ app.use(rateLimit({
 
 app.use("/api/v1/status", statusRouter);
 app.use("/api/v1/faucet", faucetRouter);
+app.use("/v1/status", statusRouter);
+app.use("/v1/faucet", faucetRouter);
 
 app.use((_req, _res, next) => {
   next(new AppError(404, "Ruta no encontrada"));

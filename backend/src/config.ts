@@ -2,6 +2,13 @@ import dotenv from "dotenv";
 
 export const DEFAULT_RMZ_TOKEN_ID = "c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908";
 export const DEFAULT_CHRONIK_URL = "https://chronik.xolosarmy.xyz";
+export const DEFAULT_ALLOWED_ORIGIN = [
+  "https://ecash.mx",
+  "https://cartera.xolosarmy.xyz",
+  "https://app.tonalli.cash",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173"
+].join(",");
 
 dotenv.config();
 
@@ -43,10 +50,10 @@ function boolEnv(name: string, fallback: boolean): boolean {
 }
 
 export const config = {
-  port: numberEnv("PORT", 3001),
+  port: numberEnv("PORT", 3015),
   nodeEnv: optional("NODE_ENV", "development"),
-  corsOrigins: listEnv("CORS_ORIGIN", "http://localhost:5173"),
-  sqlitePath: optional("SQLITE_PATH", "./data/faucet.sqlite"),
+  corsOrigins: listEnv("ALLOWED_ORIGIN", process.env.CORS_ORIGIN ?? DEFAULT_ALLOWED_ORIGIN),
+  sqlitePath: optional("FAUCET_DB_PATH", process.env.SQLITE_PATH ?? "data/faucet.sqlite"),
   claimAmountXec: optional("CLAIM_AMOUNT_XEC", "500"),
   maxClaimsWithoutRmz: numberEnv("MAX_CLAIMS_WITHOUT_RMZ", 1),
   eventCodeRequired: boolEnv("EVENT_CODE_REQUIRED", true),
@@ -62,6 +69,13 @@ export const config = {
   bitcoinAbcRpcUser: required("BITCOIN_ABC_RPC_USER"),
   bitcoinAbcRpcPass: required("BITCOIN_ABC_RPC_PASS"),
   faucetEnabled: boolEnv("FAUCET_ENABLED", true),
+  faucetDryRun: boolEnv("FAUCET_DRY_RUN", true),
+  faucetMnemonic: optional("FAUCET_MNEMONIC", ""),
+  starterXecSats: optional("STARTER_XEC_SATS", "100000"),
+  starterRmzAtoms: optional("STARTER_RMZ_ATOMS", "1"),
+  turnstileEnabled: boolEnv("TURNSTILE_ENABLED", false),
+  turnstileSecretKey: optional("TURNSTILE_SECRET_KEY", ""),
+  faucetCooldownDays: numberEnv("FAUCET_COOLDOWN_DAYS", 30),
   ipHashSecret: required("IP_HASH_SECRET")
 } as const;
 

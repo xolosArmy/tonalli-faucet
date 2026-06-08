@@ -48,3 +48,8 @@ export async function sendXecToAddress(address: string, amountXec: string): Prom
 
   return payload.result;
 }
+
+
+export async function sendRmzToAddress(_address: string, _atoms: string): Promise<string> {
+  throw new AppError(501, "Live RMZ token sending is not implemented safely yet; keep FAUCET_DRY_RUN=true.");
+}

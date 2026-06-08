@@ -34,6 +34,24 @@ db.exec(`
     status TEXT,
     error TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS starter_pack_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL,
+    ipHash TEXT NOT NULL,
+    userAgent TEXT,
+    createdAt TEXT NOT NULL,
+    xecTxid TEXT,
+    rmzTxid TEXT,
+    status TEXT NOT NULL,
+    dryRun INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_address_createdAt
+    ON starter_pack_claims (address, createdAt);
+
+  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_ipHash_createdAt
+    ON starter_pack_claims (ipHash, createdAt);
 `);
 
 export type ClaimRow = {
@@ -115,4 +133,97 @@ export function insertClaimEvent(params: {
     params.status,
     params.error ?? null
   );
+}
+
+
+export type StarterPackStatus = "pending" | "xec_sent" | "completed" | "failed" | "dry_run_completed";
+
+export type StarterPackClaimRow = {
+  id: number;
+  address: string;
+  ipHash: string;
+  userAgent: string | null;
+  createdAt: string;
+  xecTxid: string | null;
+  rmzTxid: string | null;
+  status: StarterPackStatus;
+  dryRun: number;
+};
+
+export function getRecentStarterPackClaimByAddress(address: string, since: string): StarterPackClaimRow | undefined {
+  return db.prepare(`
+    SELECT * FROM starter_pack_claims
+    WHERE address = ? AND createdAt >= ?
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `).get(address, since) as StarterPackClaimRow | undefined;
+}
+
+export function getRecentStarterPackClaimByIpHash(ipHash: string, since: string): StarterPackClaimRow | undefined {
+  return db.prepare(`
+    SELECT * FROM starter_pack_claims
+    WHERE ipHash = ? AND createdAt >= ?
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `).get(ipHash, since) as StarterPackClaimRow | undefined;
+}
+
+export function insertStarterPackClaim(params: {
+  address: string;
+  ipHash: string;
+  userAgent?: string;
+  createdAt: string;
+  xecTxid?: string | null;
+  rmzTxid?: string | null;
+  status: StarterPackStatus;
+  dryRun: boolean;
+}): number {
+  const result = db.prepare(`
+    INSERT INTO starter_pack_claims (address, ipHash, userAgent, createdAt, xecTxid, rmzTxid, status, dryRun)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    params.address,
+    params.ipHash,
+    params.userAgent ?? null,
+    params.createdAt,
+    params.xecTxid ?? null,
+    params.rmzTxid ?? null,
+    params.status,
+    params.dryRun ? 1 : 0
+  );
+  return Number(result.lastInsertRowid);
+}
+
+export function updateStarterPackClaim(params: {
+  id: number;
+  xecTxid?: string | null;
+  rmzTxid?: string | null;
+  status: StarterPackStatus;
+}): void {
+  db.prepare(`
+    UPDATE starter_pack_claims
+    SET xecTxid = COALESCE(?, xecTxid), rmzTxid = COALESCE(?, rmzTxid), status = ?
+    WHERE id = ?
+  `).run(params.xecTxid ?? null, params.rmzTxid ?? null, params.status, params.id);
+}
+
+export function getStarterPackStats(): {
+  totalClaims: number;
+  completedClaims: number;
+  failedClaims: number;
+  dryRunClaims: number;
+} {
+  return db.prepare(`
+    SELECT
+      COUNT(*) AS totalClaims,
+      COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completedClaims,
+      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failedClaims,
+      COALESCE(SUM(CASE WHEN dryRun = 1 THEN 1 ELSE 0 END), 0) AS dryRunClaims
+    FROM starter_pack_claims
+  `).get() as {
+    totalClaims: number;
+    completedClaims: number;
+    failedClaims: number;
+    dryRunClaims: number;
+  };
 }
