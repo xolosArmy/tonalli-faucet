@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { parseBitcoinAbcRpcConfig } from "./utils/rpcConfig.js";
 
 export const DEFAULT_RMZ_TOKEN_ID = "c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908";
 export const DEFAULT_CHRONIK_URL = "https://chronik.xolosarmy.xyz";
@@ -11,6 +12,19 @@ export const DEFAULT_ALLOWED_ORIGIN = [
 ].join(",");
 
 dotenv.config();
+
+let bitcoinAbcRpc: ReturnType<typeof parseBitcoinAbcRpcConfig>;
+try {
+  bitcoinAbcRpc = parseBitcoinAbcRpcConfig(
+    process.env.BITCOIN_ABC_RPC_URL,
+    process.env.BITCOIN_ABC_RPC_USER,
+    process.env.BITCOIN_ABC_RPC_PASS
+  );
+} catch (error) {
+  const message = error instanceof Error ? error.message : "Bitcoin ABC RPC configuration is invalid.";
+  console.error(`[startup] ${message}`);
+  throw error;
+}
 
 function required(name: string): string {
   const value = process.env[name];
@@ -65,9 +79,9 @@ export const config = {
   addressCooldownHours: numberEnv("ADDRESS_COOLDOWN_HOURS", 24),
   rmzTokenId: optional("RMZ_TOKEN_ID", DEFAULT_RMZ_TOKEN_ID),
   chronikUrl: optional("CHRONIK_URL", DEFAULT_CHRONIK_URL),
-  bitcoinAbcRpcUrl: required("BITCOIN_ABC_RPC_URL"),
-  bitcoinAbcRpcUser: required("BITCOIN_ABC_RPC_USER"),
-  bitcoinAbcRpcPass: required("BITCOIN_ABC_RPC_PASS"),
+  bitcoinAbcRpcUrl: bitcoinAbcRpc.url,
+  bitcoinAbcRpcUser: bitcoinAbcRpc.user,
+  bitcoinAbcRpcPass: bitcoinAbcRpc.pass,
   faucetEnabled: boolEnv("FAUCET_ENABLED", true),
   faucetDryRun: boolEnv("FAUCET_DRY_RUN", true),
   faucetMnemonic: optional("FAUCET_MNEMONIC", ""),

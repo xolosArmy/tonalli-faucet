@@ -76,7 +76,7 @@ El backend necesita acceso seguro a:
 - Bitcoin ABC RPC, preferentemente por red privada, firewall o tunel seguro.
 - SQLite en una ruta persistente y respaldada, configurada con `SQLITE_PATH`.
 - Chronik por `CHRONIK_URL`.
-- Variables reales en `backend/.env`, nunca en el frontend ni en el repositorio.
+- Variables reales en `backend/.env`, nunca en el frontend ni en el repositorio. Configura `BITCOIN_ABC_RPC_URL=http://user:password@host:port`.
 
 Configura CORS con el dominio final de Vercel o el dominio temporal de preview. `CORS_ORIGIN` acepta una lista separada por comas:
 

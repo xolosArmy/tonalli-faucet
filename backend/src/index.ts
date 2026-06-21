@@ -7,7 +7,7 @@ import { config, isProduction } from "./config.js";
 import "./db.js";
 import { faucetRouter } from "./routes/faucet.js";
 import { statusRouter } from "./routes/status.js";
-import { AppError, errorMessage } from "./utils/errors.js";
+import { AppError, serverErrorMessage } from "./utils/errors.js";
 
 const app = express();
 const corsOptions: CorsOptions = {
@@ -46,13 +46,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   const statusCode = error instanceof AppError ? error.statusCode : 500;
   const publicMessage = error instanceof AppError && error.expose ? error.message : "Error interno";
 
-  if (!isProduction) {
-    console.error(errorMessage(error));
-  }
+  console.error(serverErrorMessage(error));
 
   res.status(statusCode).json({
     error: publicMessage,
-    ...(isProduction ? {} : { detail: errorMessage(error) })
+    ...(isProduction ? {} : { detail: publicMessage })
   });
 });
 

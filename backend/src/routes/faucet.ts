@@ -16,7 +16,7 @@ import {
 import { sendRmzToAddress, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
-import { AppError, errorMessage } from "../utils/errors.js";
+import { AppError, errorMessage, serverErrorMessage } from "../utils/errors.js";
 import { hashIp } from "../utils/ipHash.js";
 
 export const faucetRouter = Router();
@@ -135,6 +135,7 @@ function starterSuccessResponse(address: string, xecTxid: string, rmzTxid: strin
 function sendStarterError(res: { status(code: number): { json(body: unknown): void } }, error: unknown): void {
   const statusCode = error instanceof AppError ? error.statusCode : 500;
   const message = error instanceof AppError && error.expose ? error.message : "Internal error";
+  console.error(serverErrorMessage(error));
   res.status(statusCode).json({ ok: false, error: message });
 }
 

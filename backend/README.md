@@ -64,6 +64,7 @@ Existing routes under `/api/v1/status` and `/api/v1/faucet/claim` are preserved.
 PORT=3015
 CHRONIK_URL=https://chronik.xolosarmy.xyz
 ALLOWED_ORIGIN=https://ecash.mx,https://cartera.xolosarmy.xyz,https://app.tonalli.cash,http://localhost:5173,http://127.0.0.1:5173
+BITCOIN_ABC_RPC_URL=http://user:password@host:port
 
 FAUCET_ENABLED=true
 FAUCET_DRY_RUN=true
@@ -80,7 +81,7 @@ FAUCET_COOLDOWN_DAYS=30
 FAUCET_DB_PATH=data/faucet.sqlite
 ```
 
-Legacy variables such as `CORS_ORIGIN` and `SQLITE_PATH` are still accepted as fallbacks. Existing Bitcoin ABC RPC variables are still used by the legacy XEC faucet and by live XEC starter-pack sending.
+Legacy variables such as `CORS_ORIGIN` and `SQLITE_PATH` are still accepted as fallbacks. `BITCOIN_ABC_RPC_URL` is backend-only, is validated at startup, and must include credentials in the documented URL format. Separate `BITCOIN_ABC_RPC_USER` and `BITCOIN_ABC_RPC_PASS` values remain accepted only for compatibility with older deployments.
 
 ## Dry Run Mode
 
