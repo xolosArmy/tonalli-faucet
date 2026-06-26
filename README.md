@@ -137,14 +137,15 @@ WantedBy=multi-user.target
 
 `GET /api/v1/status`
 
-Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled` y `claimAmountXec`.
+Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled`, `claimAmountXec`, `twitterGateEnabled` y `twitterTargetTweetUrl` cuando esta configurado.
 
 `POST /api/v1/faucet/claim`
 
 ```json
 {
   "address": "ecash:...",
-  "eventCode": "TONALLI-CU"
+  "eventCode": "TONALLI-CU",
+  "twitterHandle": "@xolosarmy"
 }
 ```
 
@@ -152,6 +153,23 @@ Rate limits de claim:
 
 - `IP_CLAIM_LIMIT_WINDOW_MS=3600000` y `IP_CLAIM_LIMIT_MAX=5` limitan los reclamos por IP antes de validar la combinacion IP:direccion.
 - `RATE_LIMIT_WINDOW_MS` y `RATE_LIMIT_MAX` mantienen el limiter existente por combinacion IP:direccion.
+
+## X Retweet Gate
+
+El X Retweet Gate es opcional y se activa con `X_RETWEET_GATE_ENABLED=true`. Cuando esta activo, `/api/v1/faucet/claim` exige `twitterHandle` y verifica con la API de X que ese usuario haya hecho repost al tweet configurado en `X_TARGET_TWEET_ID` antes de enviar XEC. Requiere una cuenta developer/API de X y un bearer token configurado solo en el backend con `X_BEARER_TOKEN`; no pongas ese secreto en el frontend ni en el repositorio.
+
+El backend obtiene el user id inmutable de X para el handle proporcionado y protege el doble claim con la clave `(provider, provider_user_id, target_tweet_id)` en `social_claims`, usando siempre `provider = "x"`. La reserva ocurre despues de event code, cooldown y RMZ gate, pero antes del envio RPC, para que dos requests simultaneas de la misma cuenta de X no disparen dos pagos. Si el envio RPC falla despues de reservar, el registro queda en `needs_review` en vez de liberarse automaticamente, porque el resultado del broadcast puede ser ambiguo.
+
+Variables relevantes:
+
+```env
+X_RETWEET_GATE_ENABLED=false
+X_BEARER_TOKEN=
+X_TARGET_TWEET_ID=
+X_TARGET_TWEET_URL=
+X_RETWEET_MAX_PAGES=5
+X_CACHE_TTL_SECONDS=300
+```
 
 ## Chronik y RMZ
 

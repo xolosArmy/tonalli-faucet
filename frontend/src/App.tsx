@@ -41,6 +41,7 @@ function connectionLabel(state: ConnectionState): string | null {
 export default function App() {
   const [address, setAddress] = useState("");
   const [eventCode, setEventCode] = useState("TONALLI-CU");
+  const [twitterHandle, setTwitterHandle] = useState("");
   const [status, setStatus] = useState<FaucetStatus | null>(null);
   const [claimState, setClaimState] = useState<ClaimState>({ kind: "idle" });
   const [connectionState, setConnectionState] = useState<ConnectionState>({ kind: "idle" });
@@ -139,9 +140,12 @@ export default function App() {
 
   async function onClaim(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setClaimState({ kind: "loading", message: "Procesando claim..." });
+    setClaimState({
+      kind: "loading",
+      message: status?.twitterGateEnabled ? "Verificando repost y enviando XEC..." : "Procesando claim..."
+    });
     try {
-      const result = await claimFaucet(address, eventCode);
+      const result = await claimFaucet(address, eventCode, twitterHandle);
       setClaimState({ kind: "success", txid: result.txid, claimCount: result.claimCount });
       const nextStatus = await getFaucetStatus();
       setStatus(nextStatus);
@@ -222,13 +226,38 @@ export default function App() {
           <label htmlFor="eventCode">Codigo de evento</label>
           <input
             id="eventCode"
+            className="eventCodeInput"
             value={eventCode}
             onChange={(event) => setEventCode(event.target.value)}
             placeholder="TONALLI-CU"
             autoCapitalize="characters"
           />
 
-          <button className="claimButton" type="submit" disabled={!address || isBusy}>
+          {status?.twitterGateEnabled && (
+            <>
+              <label htmlFor="twitterHandle">Tu usuario de X</label>
+              <input
+                id="twitterHandle"
+                value={twitterHandle}
+                onChange={(event) => setTwitterHandle(event.target.value)}
+                placeholder="@xolosarmy"
+                autoCapitalize="none"
+                required
+              />
+              <p className="formHelp">Haz repost al post oficial para recibir tu premio.</p>
+              {status.twitterTargetTweetUrl && (
+                <a className="officialPostLink" href={status.twitterTargetTweetUrl} target="_blank" rel="noreferrer">
+                  Ver post oficial
+                </a>
+              )}
+            </>
+          )}
+
+          <button
+            className="claimButton"
+            type="submit"
+            disabled={!address || isBusy || (status?.twitterGateEnabled === true && !twitterHandle.trim())}
+          >
             Recibir XEC
           </button>
         </form>

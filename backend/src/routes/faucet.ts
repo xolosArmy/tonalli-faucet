@@ -4,18 +4,22 @@ import rateLimit from "express-rate-limit";
 import { isValidEcashAddress } from "@xolosarmy/tonalli-core";
 import { config } from "../config.js";
 import {
+  completeSocialClaim,
   getClaim,
   getRecentStarterPackClaimByAddress,
   getRecentStarterPackClaimByIpHash,
   getStarterPackStats,
   insertClaimEvent,
   insertStarterPackClaim,
+  markSocialClaimNeedsReview,
+  reserveSocialClaim,
   updateStarterPackClaim,
   upsertClaim
 } from "../db.js";
 import { sendRmzToAddress, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
+import { cleanTwitterHandle, verifyRetweetAndGetUserId } from "../services/twitter.js";
 import { AppError, errorMessage, serverErrorMessage } from "../utils/errors.js";
 import { hashIp } from "../utils/ipHash.js";
 
@@ -147,6 +151,8 @@ faucetRouter.get("/health", (_req, res) => {
     dryRun: config.faucetDryRun,
     turnstileEnabled: config.turnstileEnabled,
     cooldownDays: config.faucetCooldownDays,
+    twitterGateEnabled: config.twitterGateEnabled,
+    twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined,
     starterPack: starterPackPayload()
   });
 });
@@ -234,6 +240,8 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
   const eventCode = cleanEventCode(req.body?.eventCode);
   let rmzGateRequired = false;
   let rmzGatePassed = false;
+  let twitterUserId: string | null = null;
+  let hasSocialReservation = false;
 
   try {
     if (!config.faucetEnabled) {
@@ -262,7 +270,43 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
       }
     }
 
-    const txid = await sendXecToAddress(address, config.claimAmountXec);
+    if (config.twitterGateEnabled) {
+      const twitterHandle = cleanTwitterHandle(req.body?.twitterHandle);
+      const twitterCheck = await verifyRetweetAndGetUserId(twitterHandle, config.twitterTargetTweetId);
+      if (!twitterCheck.hasRetweeted) {
+        throw new AppError(403, "No encontramos tu repost. Por favor haz repost al post oficial e intenta de nuevo.");
+      }
+
+      twitterUserId = twitterCheck.userId;
+      const reservation = reserveSocialClaim({
+        provider: "x",
+        providerUserId: twitterUserId,
+        handle: twitterHandle,
+        targetTweetId: config.twitterTargetTweetId,
+        address,
+        createdAt: now
+      });
+
+      if (!reservation.ok) {
+        throw new AppError(403, "Esta cuenta de X ya reclamó la recompensa o tiene un cobro en proceso.");
+      }
+      hasSocialReservation = true;
+    }
+
+    let txid: string;
+    try {
+      txid = await sendXecToAddress(address, config.claimAmountXec);
+    } catch (error) {
+      if (hasSocialReservation && twitterUserId) {
+        markSocialClaimNeedsReview("x", twitterUserId, config.twitterTargetTweetId, errorMessage(error));
+      }
+      throw error;
+    }
+
+    if (hasSocialReservation && twitterUserId) {
+      completeSocialClaim("x", twitterUserId, config.twitterTargetTweetId, txid, now);
+    }
+
     const claimCount = upsertClaim({ address, txid, ipHash, rmzGatePassed, now });
 
     insertClaimEvent({
