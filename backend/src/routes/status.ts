@@ -10,6 +10,8 @@ statusRouter.get("/", (_req, res) => {
     totalClaims: stats.totalClaims,
     uniqueAddresses: stats.uniqueAddresses,
     faucetEnabled: config.faucetEnabled,
-    claimAmountXec: config.claimAmountXec
+    claimAmountXec: config.claimAmountXec,
+    twitterGateEnabled: config.twitterGateEnabled,
+    twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined
   });
 });

@@ -196,7 +196,23 @@ h1 {
   border: 1px solid #cbd8cf;
   border-radius: 8px;
   padding: 0 12px;
+}
+
+.eventCodeInput {
   text-transform: uppercase;
+}
+
+.formHelp {
+  margin: -2px 0 0;
+  color: #4c5f53;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.officialPostLink {
+  color: #176b3a;
+  font-size: 0.92rem;
+  font-weight: 700;
 }
 
 .claimButton {

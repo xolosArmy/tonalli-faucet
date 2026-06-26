@@ -47,6 +47,20 @@ db.exec(`
     dryRun INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS social_claims (
+    provider TEXT NOT NULL,
+    provider_user_id TEXT NOT NULL,
+    handle TEXT,
+    target_tweet_id TEXT NOT NULL,
+    address TEXT NOT NULL,
+    txid TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    error TEXT,
+    PRIMARY KEY (provider, provider_user_id, target_tweet_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_address_createdAt
     ON starter_pack_claims (address, createdAt);
 
@@ -135,6 +149,82 @@ export function insertClaimEvent(params: {
   );
 }
 
+
+export type SocialClaimStatus = "pending" | "completed" | "failed" | "needs_review";
+
+function isUniqueConstraintError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  return (
+    (code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE") &&
+    typeof message === "string" &&
+    message.includes("social_claims.provider")
+  );
+}
+
+export function reserveSocialClaim(data: {
+  provider: string;
+  providerUserId: string;
+  handle?: string | null;
+  targetTweetId: string;
+  address: string;
+  createdAt: string;
+}): { ok: boolean } {
+  const reused = db.prepare(`
+    UPDATE social_claims
+    SET status = 'pending', address = ?, handle = ?, error = NULL, txid = NULL, completed_at = NULL, created_at = ?
+    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ? AND status = 'failed'
+  `).run(data.address, data.handle ?? null, data.createdAt, data.provider, data.providerUserId, data.targetTweetId);
+
+  if (reused.changes > 0) {
+    return { ok: true };
+  }
+
+  try {
+    db.prepare(`
+      INSERT INTO social_claims (
+        provider, provider_user_id, handle, target_tweet_id, address, created_at, status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'pending')
+    `).run(data.provider, data.providerUserId, data.handle ?? null, data.targetTweetId, data.address, data.createdAt);
+    return { ok: true };
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return { ok: false };
+    }
+    throw error;
+  }
+}
+
+export function completeSocialClaim(
+  provider: string,
+  providerUserId: string,
+  targetTweetId: string,
+  txid: string,
+  now: string
+): void {
+  db.prepare(`
+    UPDATE social_claims
+    SET status = 'completed', txid = ?, completed_at = ?, error = NULL
+    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ?
+  `).run(txid, now, provider, providerUserId, targetTweetId);
+}
+
+export function markSocialClaimNeedsReview(
+  provider: string,
+  providerUserId: string,
+  targetTweetId: string,
+  errorMsg: string
+): void {
+  db.prepare(`
+    UPDATE social_claims
+    SET status = 'needs_review', error = ?
+    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ?
+  `).run(errorMsg, provider, providerUserId, targetTweetId);
+}
 
 export type StarterPackStatus = "pending" | "xec_sent" | "completed" | "failed" | "dry_run_completed";
 

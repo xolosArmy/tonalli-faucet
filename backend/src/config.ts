@@ -90,7 +90,28 @@ export const config = {
   turnstileEnabled: boolEnv("TURNSTILE_ENABLED", false),
   turnstileSecretKey: optional("TURNSTILE_SECRET_KEY", ""),
   faucetCooldownDays: numberEnv("FAUCET_COOLDOWN_DAYS", 30),
+  twitterGateEnabled: boolEnv("X_RETWEET_GATE_ENABLED", false),
+  twitterBearerToken: optional("X_BEARER_TOKEN", ""),
+  twitterTargetTweetId: optional("X_TARGET_TWEET_ID", ""),
+  twitterTargetTweetUrl: optional("X_TARGET_TWEET_URL", ""),
+  twitterRetweetMaxPages: numberEnv("X_RETWEET_MAX_PAGES", 5),
+  twitterCacheTtlSeconds: numberEnv("X_CACHE_TTL_SECONDS", 300),
   ipHashSecret: required("IP_HASH_SECRET")
 } as const;
+
+if (config.twitterGateEnabled) {
+  if (!config.twitterBearerToken) {
+    throw new Error("Missing required environment variable: X_BEARER_TOKEN");
+  }
+  if (!/^[0-9]{1,19}$/.test(config.twitterTargetTweetId)) {
+    throw new Error("X_TARGET_TWEET_ID must be a numeric tweet id with 1 to 19 digits.");
+  }
+  if (!Number.isInteger(config.twitterRetweetMaxPages) || config.twitterRetweetMaxPages <= 0) {
+    throw new Error("X_RETWEET_MAX_PAGES must be a positive integer.");
+  }
+  if (!Number.isInteger(config.twitterCacheTtlSeconds) || config.twitterCacheTtlSeconds <= 0) {
+    throw new Error("X_CACHE_TTL_SECONDS must be a positive integer.");
+  }
+}
 
 export const isProduction = config.nodeEnv === "production";

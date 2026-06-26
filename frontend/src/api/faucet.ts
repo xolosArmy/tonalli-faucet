@@ -6,6 +6,8 @@ export type FaucetStatus = {
   uniqueAddresses: number;
   faucetEnabled: boolean;
   claimAmountXec: string;
+  twitterGateEnabled: boolean;
+  twitterTargetTweetUrl?: string;
 };
 
 export type ClaimResponse = {
@@ -35,13 +37,13 @@ export async function getFaucetStatus(): Promise<FaucetStatus> {
   return parseJson<FaucetStatus>(response);
 }
 
-export async function claimFaucet(address: string, eventCode: string): Promise<ClaimResponse> {
+export async function claimFaucet(address: string, eventCode: string, twitterHandle?: string): Promise<ClaimResponse> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/api/v1/faucet/claim`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ address, eventCode })
+      body: JSON.stringify({ address, eventCode, twitterHandle })
     });
   } catch {
     throw new Error(FAUCET_MAINTENANCE_MESSAGE);
