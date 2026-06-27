@@ -137,7 +137,7 @@ WantedBy=multi-user.target
 
 `GET /api/v1/status`
 
-Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled`, `claimAmountXec`, `twitterGateEnabled` y `twitterTargetTweetUrl` cuando esta configurado.
+Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled`, `claimAmountXec`, los campos del X Gate y `telegramGateEnabled`, `telegramTargetChatUrl` y `telegramBotUsername` cuando están configurados.
 
 `POST /api/v1/faucet/claim`
 
@@ -145,7 +145,8 @@ Devuelve `totalClaims`, `uniqueAddresses`, `faucetEnabled`, `claimAmountXec`, `t
 {
   "address": "ecash:...",
   "eventCode": "TONALLI-CU",
-  "twitterHandle": "@xolosarmy"
+  "provider": "telegram",
+  "telegramNonce": "nonce-generado-por-el-backend"
 }
 ```
 
@@ -158,7 +159,7 @@ Rate limits de claim:
 
 El X Retweet Gate es opcional y se activa con `X_RETWEET_GATE_ENABLED=true`. Cuando esta activo, `/api/v1/faucet/claim` exige `twitterHandle` y verifica con la API de X que ese usuario haya hecho repost al tweet configurado en `X_TARGET_TWEET_ID` antes de enviar XEC. Requiere una cuenta developer/API de X y un bearer token configurado solo en el backend con `X_BEARER_TOKEN`; no pongas ese secreto en el frontend ni en el repositorio.
 
-El backend obtiene el user id inmutable de X para el handle proporcionado y protege el doble claim con la clave `(provider, provider_user_id, target_tweet_id)` en `social_claims`, usando siempre `provider = "x"`. La reserva ocurre despues de event code, cooldown y RMZ gate, pero antes del envio RPC, para que dos requests simultaneas de la misma cuenta de X no disparen dos pagos. Si el envio RPC falla despues de reservar, el registro queda en `needs_review` en vez de liberarse automaticamente, porque el resultado del broadcast puede ser ambiguo.
+El backend obtiene el user id inmutable de X para el handle proporcionado y protege el doble claim con la clave `(provider, provider_user_id, target_id)` en `social_claims`, usando siempre `provider = "x"`. La reserva ocurre despues de event code, cooldown y RMZ gate, pero antes del envio RPC, para que dos requests simultaneas de la misma cuenta de X no disparen dos pagos. Si el envio RPC falla despues de reservar, el registro queda en `needs_review` en vez de liberarse automaticamente, porque el resultado del broadcast puede ser ambiguo.
 
 Variables relevantes:
 
@@ -170,6 +171,45 @@ X_TARGET_TWEET_URL=
 X_RETWEET_MAX_PAGES=5
 X_CACHE_TTL_SECONDS=300
 ```
+
+## Telegram Gate
+
+Telegram Gate es opcional y es el proveedor principal recomendado para el MVP público. Se activa con `TELEGRAM_GATE_ENABLED=true`. Crea el bot con BotFather y agrégalo como administrador del canal o grupo objetivo para que `getChatMember` pueda comprobar la membresía de forma confiable. Configura el token únicamente en el backend; nunca lo expongas en el frontend ni lo subas al repositorio.
+
+Variables requeridas cuando el gate está activo:
+
+```env
+TELEGRAM_GATE_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_BOT_USERNAME=
+TELEGRAM_TARGET_CHAT_ID=
+TELEGRAM_TARGET_CHAT_URL=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_SESSION_TTL_MINUTES=15
+```
+
+`TELEGRAM_TARGET_CHAT_ID` acepta un identificador como `@canal` o `-1001234567890`. `TELEGRAM_TARGET_CHAT_URL` es opcional, pero permite mostrar el enlace del canal en el frontend.
+
+El flujo es: el frontend crea una sesión ligada a la dirección y, cuando aplica, al código de evento; el backend genera un deep link al bot con un nonce temporal; el webhook autenticado obtiene el `user_id` numérico directamente del update de Telegram y lo vincula al nonce. No se acepta un user id ni un username escrito por el frontend. El webhook no paga XEC. Al reclamar en `/claim`, el backend vuelve a comprobar la sesión, su expiración, dirección y evento, y ejecuta `getChatMember` en ese momento.
+
+La tabla `social_claims` evita pagos dobles por `provider_user_id + target_id`. La reserva ocurre antes de enviar XEC. Si el RPC falla después de reservar, el registro queda en `needs_review` porque el resultado del broadcast puede ser ambiguo.
+
+Configura el webhook con el mismo secreto del backend:
+
+```bash
+curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://api-faucet.tonalli.cash/api/v1/social/telegram/webhook",
+    "secret_token": "'"$TELEGRAM_WEBHOOK_SECRET"'"
+  }'
+```
+
+Endpoints del flujo:
+
+- `POST /api/v1/social/telegram/start`: crea la sesión y devuelve el deep link.
+- `GET /api/v1/social/telegram/session/:nonce`: permite al frontend consultar verificación y expiración.
+- `POST /api/v1/social/telegram/webhook`: vincula el nonce con el usuario enviado por Telegram.
 
 ## Chronik y RMZ
 

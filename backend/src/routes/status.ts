@@ -12,6 +12,9 @@ statusRouter.get("/", (_req, res) => {
     faucetEnabled: config.faucetEnabled,
     claimAmountXec: config.claimAmountXec,
     twitterGateEnabled: config.twitterGateEnabled,
-    twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined
+    twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined,
+    telegramGateEnabled: config.telegramGateEnabled,
+    telegramTargetChatUrl: config.telegramTargetChatUrl || undefined,
+    telegramBotUsername: config.telegramBotUsername || undefined
   });
 });

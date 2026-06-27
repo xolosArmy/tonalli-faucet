@@ -47,25 +47,55 @@ db.exec(`
     dryRun INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_address_createdAt
+    ON starter_pack_claims (address, createdAt);
+
+  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_ipHash_createdAt
+    ON starter_pack_claims (ipHash, createdAt);
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS social_claims (
     provider TEXT NOT NULL,
     provider_user_id TEXT NOT NULL,
     handle TEXT,
-    target_tweet_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
     address TEXT NOT NULL,
     txid TEXT,
     created_at TEXT NOT NULL,
     completed_at TEXT,
     status TEXT NOT NULL,
     error TEXT,
-    PRIMARY KEY (provider, provider_user_id, target_tweet_id)
+    PRIMARY KEY (provider, provider_user_id, target_id)
+  );
+`);
+
+const socialClaimColumns = db
+  .prepare("PRAGMA table_info('social_claims')")
+  .all() as Array<{ name: string }>;
+const hasTargetId = socialClaimColumns.some((column) => column.name === "target_id");
+const hasTargetTweetId = socialClaimColumns.some((column) => column.name === "target_tweet_id");
+
+if (!hasTargetId && hasTargetTweetId) {
+  db.exec("ALTER TABLE social_claims RENAME COLUMN target_tweet_id TO target_id");
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS social_auth_sessions (
+    nonce TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    address TEXT NOT NULL,
+    event_code TEXT,
+    provider_user_id TEXT,
+    handle TEXT,
+    target_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    verified_at TEXT
   );
 
-  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_address_createdAt
-    ON starter_pack_claims (address, createdAt);
-
-  CREATE INDEX IF NOT EXISTS idx_starter_pack_claims_ipHash_createdAt
-    ON starter_pack_claims (ipHash, createdAt);
+  CREATE INDEX IF NOT EXISTS idx_social_auth_sessions_provider_user
+    ON social_auth_sessions (provider, provider_user_id, target_id);
 `);
 
 export type ClaimRow = {
@@ -168,16 +198,16 @@ function isUniqueConstraintError(error: unknown): boolean {
 export function reserveSocialClaim(data: {
   provider: string;
   providerUserId: string;
-  handle?: string | null;
-  targetTweetId: string;
+  handle: string;
+  targetId: string;
   address: string;
   createdAt: string;
 }): { ok: boolean } {
   const reused = db.prepare(`
     UPDATE social_claims
     SET status = 'pending', address = ?, handle = ?, error = NULL, txid = NULL, completed_at = NULL, created_at = ?
-    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ? AND status = 'failed'
-  `).run(data.address, data.handle ?? null, data.createdAt, data.provider, data.providerUserId, data.targetTweetId);
+    WHERE provider = ? AND provider_user_id = ? AND target_id = ? AND status = 'failed'
+  `).run(data.address, data.handle, data.createdAt, data.provider, data.providerUserId, data.targetId);
 
   if (reused.changes > 0) {
     return { ok: true };
@@ -186,10 +216,10 @@ export function reserveSocialClaim(data: {
   try {
     db.prepare(`
       INSERT INTO social_claims (
-        provider, provider_user_id, handle, target_tweet_id, address, created_at, status
+        provider, provider_user_id, handle, target_id, address, created_at, status
       )
       VALUES (?, ?, ?, ?, ?, ?, 'pending')
-    `).run(data.provider, data.providerUserId, data.handle ?? null, data.targetTweetId, data.address, data.createdAt);
+    `).run(data.provider, data.providerUserId, data.handle, data.targetId, data.address, data.createdAt);
     return { ok: true };
   } catch (error) {
     if (isUniqueConstraintError(error)) {
@@ -202,28 +232,94 @@ export function reserveSocialClaim(data: {
 export function completeSocialClaim(
   provider: string,
   providerUserId: string,
-  targetTweetId: string,
+  targetId: string,
   txid: string,
   now: string
 ): void {
   db.prepare(`
     UPDATE social_claims
     SET status = 'completed', txid = ?, completed_at = ?, error = NULL
-    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ?
-  `).run(txid, now, provider, providerUserId, targetTweetId);
+    WHERE provider = ? AND provider_user_id = ? AND target_id = ?
+  `).run(txid, now, provider, providerUserId, targetId);
 }
 
 export function markSocialClaimNeedsReview(
   provider: string,
   providerUserId: string,
-  targetTweetId: string,
+  targetId: string,
   errorMsg: string
 ): void {
   db.prepare(`
     UPDATE social_claims
     SET status = 'needs_review', error = ?
-    WHERE provider = ? AND provider_user_id = ? AND target_tweet_id = ?
-  `).run(errorMsg, provider, providerUserId, targetTweetId);
+    WHERE provider = ? AND provider_user_id = ? AND target_id = ?
+  `).run(errorMsg, provider, providerUserId, targetId);
+}
+
+export type SocialAuthSessionRow = {
+  nonce: string;
+  provider: string;
+  address: string;
+  event_code: string | null;
+  provider_user_id: string | null;
+  handle: string | null;
+  target_id: string;
+  created_at: string;
+  expires_at: string;
+  verified_at: string | null;
+};
+
+export function createSocialAuthSession(data: {
+  nonce: string;
+  provider: string;
+  address: string;
+  eventCode?: string | null;
+  targetId: string;
+  createdAt: string;
+  expiresAt: string;
+}): void {
+  db.prepare(`
+    INSERT INTO social_auth_sessions (
+      nonce, provider, address, event_code, target_id, created_at, expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.nonce,
+    data.provider,
+    data.address,
+    data.eventCode ?? null,
+    data.targetId,
+    data.createdAt,
+    data.expiresAt
+  );
+}
+
+export function getSocialAuthSession(nonce: string): SocialAuthSessionRow | undefined {
+  return db.prepare("SELECT * FROM social_auth_sessions WHERE nonce = ?").get(nonce) as
+    | SocialAuthSessionRow
+    | undefined;
+}
+
+export function verifySocialAuthSession(data: {
+  nonce: string;
+  providerUserId: string;
+  handle?: string | null;
+  verifiedAt: string;
+}): boolean {
+  const result = db.prepare(`
+    UPDATE social_auth_sessions
+    SET provider_user_id = ?, handle = ?, verified_at = ?
+    WHERE nonce = ?
+  `).run(data.providerUserId, data.handle ?? null, data.verifiedAt, data.nonce);
+  return result.changes > 0;
+}
+
+export function cleanupExpiredSocialAuthSessions(now: string): number {
+  const result = db.prepare(`
+    DELETE FROM social_auth_sessions
+    WHERE expires_at < ? AND (verified_at IS NULL OR verified_at < ?)
+  `).run(now, now);
+  return result.changes;
 }
 
 export type StarterPackStatus = "pending" | "xec_sent" | "completed" | "failed" | "dry_run_completed";

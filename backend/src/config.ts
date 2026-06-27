@@ -96,6 +96,13 @@ export const config = {
   twitterTargetTweetUrl: optional("X_TARGET_TWEET_URL", ""),
   twitterRetweetMaxPages: numberEnv("X_RETWEET_MAX_PAGES", 5),
   twitterCacheTtlSeconds: numberEnv("X_CACHE_TTL_SECONDS", 300),
+  telegramGateEnabled: boolEnv("TELEGRAM_GATE_ENABLED", false),
+  telegramBotToken: optional("TELEGRAM_BOT_TOKEN", ""),
+  telegramBotUsername: optional("TELEGRAM_BOT_USERNAME", ""),
+  telegramTargetChatId: optional("TELEGRAM_TARGET_CHAT_ID", ""),
+  telegramTargetChatUrl: optional("TELEGRAM_TARGET_CHAT_URL", ""),
+  telegramWebhookSecret: optional("TELEGRAM_WEBHOOK_SECRET", ""),
+  telegramSessionTtlMinutes: numberEnv("TELEGRAM_SESSION_TTL_MINUTES", 15),
   ipHashSecret: required("IP_HASH_SECRET")
 } as const;
 
@@ -111,6 +118,24 @@ if (config.twitterGateEnabled) {
   }
   if (!Number.isInteger(config.twitterCacheTtlSeconds) || config.twitterCacheTtlSeconds <= 0) {
     throw new Error("X_CACHE_TTL_SECONDS must be a positive integer.");
+  }
+}
+
+if (config.telegramGateEnabled) {
+  if (!config.telegramBotToken) {
+    throw new Error("Missing required environment variable: TELEGRAM_BOT_TOKEN");
+  }
+  if (!config.telegramBotUsername) {
+    throw new Error("Missing required environment variable: TELEGRAM_BOT_USERNAME");
+  }
+  if (!config.telegramTargetChatId) {
+    throw new Error("Missing required environment variable: TELEGRAM_TARGET_CHAT_ID");
+  }
+  if (!config.telegramWebhookSecret) {
+    throw new Error("Missing required environment variable: TELEGRAM_WEBHOOK_SECRET");
+  }
+  if (!Number.isInteger(config.telegramSessionTtlMinutes) || config.telegramSessionTtlMinutes <= 0) {
+    throw new Error("TELEGRAM_SESSION_TTL_MINUTES must be a positive integer.");
   }
 }
 

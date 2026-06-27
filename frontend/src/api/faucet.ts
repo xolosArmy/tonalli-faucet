@@ -8,6 +8,9 @@ export type FaucetStatus = {
   claimAmountXec: string;
   twitterGateEnabled: boolean;
   twitterTargetTweetUrl?: string;
+  telegramGateEnabled: boolean;
+  telegramTargetChatUrl?: string;
+  telegramBotUsername?: string;
 };
 
 export type ClaimResponse = {
@@ -16,6 +19,33 @@ export type ClaimResponse = {
   claimCount: number;
   rmzGateRequired: boolean;
   rmzGatePassed: boolean;
+  socialProvider?: "x" | "telegram";
+};
+
+export type TelegramStartResponse = {
+  ok: true;
+  provider: "telegram";
+  nonce: string;
+  botUrl: string;
+  targetChatUrl?: string;
+  expiresAt: string;
+};
+
+export type TelegramSessionStatus = {
+  ok: true;
+  provider: "telegram";
+  verified: boolean;
+  expired: boolean;
+  handle?: string;
+  targetChatUrl?: string;
+};
+
+export type ClaimParams = {
+  address: string;
+  eventCode: string;
+  provider?: "x" | "telegram";
+  twitterHandle?: string;
+  telegramNonce?: string;
 };
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -37,13 +67,32 @@ export async function getFaucetStatus(): Promise<FaucetStatus> {
   return parseJson<FaucetStatus>(response);
 }
 
-export async function claimFaucet(address: string, eventCode: string, twitterHandle?: string): Promise<ClaimResponse> {
+export async function createTelegramSession(
+  address: string,
+  eventCode: string
+): Promise<TelegramStartResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/social/telegram/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ address, eventCode })
+  });
+  return parseJson<TelegramStartResponse>(response);
+}
+
+export async function getTelegramSession(nonce: string): Promise<TelegramSessionStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/social/telegram/session/${encodeURIComponent(nonce)}`
+  );
+  return parseJson<TelegramSessionStatus>(response);
+}
+
+export async function claimFaucet(params: ClaimParams): Promise<ClaimResponse> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/api/v1/faucet/claim`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ address, eventCode, twitterHandle })
+      body: JSON.stringify(params)
     });
   } catch {
     throw new Error(FAUCET_MAINTENANCE_MESSAGE);
