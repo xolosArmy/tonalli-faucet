@@ -7,6 +7,7 @@ import { config, isProduction } from "./config.js";
 import "./db.js";
 import { faucetRouter } from "./routes/faucet.js";
 import { statusRouter } from "./routes/status.js";
+import { socialRouter } from "./routes/social.js";
 import { AppError, serverErrorMessage } from "./utils/errors.js";
 
 const app = express();
@@ -30,13 +31,18 @@ app.use(rateLimit({
   windowMs: config.rateLimitWindowMs,
   limit: config.rateLimitMax,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skip: (req) =>
+    (req.method === "GET" && /^\/(?:api\/)?v1\/social\/telegram\/session\//.test(req.path)) ||
+    (req.method === "POST" && /^\/(?:api\/)?v1\/social\/telegram\/webhook$/.test(req.path))
 }));
 
 app.use("/api/v1/status", statusRouter);
 app.use("/api/v1/faucet", faucetRouter);
+app.use("/api/v1/social", socialRouter);
 app.use("/v1/status", statusRouter);
 app.use("/v1/faucet", faucetRouter);
+app.use("/v1/social", socialRouter);
 
 app.use((_req, _res, next) => {
   next(new AppError(404, "Ruta no encontrada"));

@@ -280,3 +280,38 @@ h1 {
     font-size: 0.72rem;
   }
 }
+
+.socialGateNotice {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #cfe1d5;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fbf7;
+}
+
+.socialGateNotice p {
+  margin: 0;
+}
+
+.telegramGateActions {
+  display: grid;
+  gap: 10px;
+}
+
+.telegramStatus,
+.hint {
+  color: #4c5f53;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.successText {
+  color: #176b3a;
+  font-weight: 700;
+}
+
+.errorText {
+  color: #8f1f17;
+  font-weight: 700;
+}

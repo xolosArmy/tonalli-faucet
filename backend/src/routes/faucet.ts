@@ -6,6 +6,7 @@ import { config } from "../config.js";
 import {
   completeSocialClaim,
   getClaim,
+  getSocialAuthSession,
   getRecentStarterPackClaimByAddress,
   getRecentStarterPackClaimByIpHash,
   getStarterPackStats,
@@ -20,6 +21,7 @@ import { sendRmzToAddress, sendXecToAddress } from "../services/bitcoinAbcRpc.js
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
 import { cleanTwitterHandle, verifyRetweetAndGetUserId } from "../services/twitter.js";
+import { verifyTelegramMembership } from "../services/telegram.js";
 import { AppError, errorMessage, serverErrorMessage } from "../utils/errors.js";
 import { hashIp } from "../utils/ipHash.js";
 
@@ -240,7 +242,9 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
   const eventCode = cleanEventCode(req.body?.eventCode);
   let rmzGateRequired = false;
   let rmzGatePassed = false;
-  let twitterUserId: string | null = null;
+  let socialProvider: "x" | "telegram" | null = null;
+  let socialUserId: string | null = null;
+  let socialTargetId: string | null = null;
   let hasSocialReservation = false;
 
   try {
@@ -257,6 +261,19 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
       throw new AppError(403, "Codigo de evento invalido.");
     }
 
+    const requestedProvider = req.body?.provider;
+    if (requestedProvider !== undefined && requestedProvider !== "x" && requestedProvider !== "telegram") {
+      throw new AppError(400, "Proveedor social invalido.");
+    }
+    socialProvider = requestedProvider
+      ?? (config.telegramGateEnabled ? "telegram" : config.twitterGateEnabled ? "x" : null);
+    if (socialProvider === "telegram" && !config.telegramGateEnabled) {
+      throw new AppError(400, "Telegram Gate no esta habilitado.");
+    }
+    if (socialProvider === "x" && !config.twitterGateEnabled) {
+      throw new AppError(400, "X Gate no esta habilitado.");
+    }
+
     const existing = getClaim(address);
     assertCooldown(existing?.last_claim_at ?? null);
 
@@ -270,25 +287,76 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
       }
     }
 
-    if (config.twitterGateEnabled) {
-      const twitterHandle = cleanTwitterHandle(req.body?.twitterHandle);
+    let socialHandle: string | null = null;
+    if (socialProvider === "telegram") {
+      const telegramNonce = typeof req.body?.telegramNonce === "string"
+        ? req.body.telegramNonce.trim()
+        : "";
+      if (!telegramNonce) {
+        throw new AppError(400, "La verificacion de Telegram es requerida.");
+      }
+
+      const session = getSocialAuthSession(telegramNonce);
+      if (!session || session.provider !== "telegram") {
+        throw new AppError(403, "La verificacion de Telegram no es valida.");
+      }
+      const expiresAt = Date.parse(session.expires_at);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new AppError(403, "La verificacion de Telegram expiro. Genera una nueva.");
+      }
+      if (!session.verified_at || !session.provider_user_id) {
+        throw new AppError(403, "Completa la verificacion con el bot de Telegram antes de reclamar.");
+      }
+      if (session.address !== address) {
+        throw new AppError(403, "La verificacion de Telegram pertenece a otra direccion.");
+      }
+      if (config.eventCodeRequired && session.event_code !== eventCode) {
+        throw new AppError(403, "La verificacion de Telegram pertenece a otro codigo de evento.");
+      }
+      if (session.target_id !== config.telegramTargetChatId) {
+        throw new AppError(403, "La verificacion de Telegram ya no corresponde al canal activo.");
+      }
+
+      const membership = await verifyTelegramMembership(
+        session.provider_user_id,
+        config.telegramTargetChatId
+      );
+      if (!membership.isMember) {
+        throw new AppError(
+          403,
+          "Aún no detectamos tu membresía en Telegram. Únete al canal oficial e intenta de nuevo."
+        );
+      }
+
+      socialUserId = session.provider_user_id;
+      socialHandle = session.handle ?? "telegram-user";
+      socialTargetId = config.telegramTargetChatId;
+    } else if (socialProvider === "x") {
+      const twitterHandle = cleanTwitterHandle(req.body?.twitterHandle ?? req.body?.socialHandle);
       const twitterCheck = await verifyRetweetAndGetUserId(twitterHandle, config.twitterTargetTweetId);
       if (!twitterCheck.hasRetweeted) {
         throw new AppError(403, "No encontramos tu repost. Por favor haz repost al post oficial e intenta de nuevo.");
       }
 
-      twitterUserId = twitterCheck.userId;
+      socialUserId = twitterCheck.userId;
+      socialHandle = twitterHandle;
+      socialTargetId = config.twitterTargetTweetId;
+    }
+
+    if (socialProvider && socialUserId && socialHandle && socialTargetId) {
       const reservation = reserveSocialClaim({
-        provider: "x",
-        providerUserId: twitterUserId,
-        handle: twitterHandle,
-        targetTweetId: config.twitterTargetTweetId,
+        provider: socialProvider,
+        providerUserId: socialUserId,
+        handle: socialHandle,
+        targetId: socialTargetId,
         address,
         createdAt: now
       });
-
       if (!reservation.ok) {
-        throw new AppError(403, "Esta cuenta de X ya reclamó la recompensa o tiene un cobro en proceso.");
+        const message = socialProvider === "telegram"
+          ? "Esta cuenta de Telegram ya reclamó la recompensa o tiene un cobro en revisión."
+          : "Esta cuenta de X ya reclamó la recompensa o tiene un cobro en proceso.";
+        throw new AppError(403, message);
       }
       hasSocialReservation = true;
     }
@@ -297,14 +365,14 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
     try {
       txid = await sendXecToAddress(address, config.claimAmountXec);
     } catch (error) {
-      if (hasSocialReservation && twitterUserId) {
-        markSocialClaimNeedsReview("x", twitterUserId, config.twitterTargetTweetId, errorMessage(error));
+      if (hasSocialReservation && socialProvider && socialUserId && socialTargetId) {
+        markSocialClaimNeedsReview(socialProvider, socialUserId, socialTargetId, errorMessage(error));
       }
       throw error;
     }
 
-    if (hasSocialReservation && twitterUserId) {
-      completeSocialClaim("x", twitterUserId, config.twitterTargetTweetId, txid, now);
+    if (hasSocialReservation && socialProvider && socialUserId && socialTargetId) {
+      completeSocialClaim(socialProvider, socialUserId, socialTargetId, txid, now);
     }
 
     const claimCount = upsertClaim({ address, txid, ipHash, rmzGatePassed, now });
@@ -327,7 +395,8 @@ faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, nex
       txid,
       claimCount,
       rmzGateRequired,
-      rmzGatePassed
+      rmzGatePassed,
+      socialProvider: socialProvider || undefined
     });
   } catch (error) {
     insertClaimEvent({
