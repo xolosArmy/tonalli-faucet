@@ -16,10 +16,18 @@ curl http://127.0.0.1:3015/v1/faucet/health | jq
 
 Returns faucet health and starter-pack configuration that is safe to expose.
 
-### Starter pack
+### Welcome XEC starter pack
+
+`POST /v1/faucet/starter-pack` is owned exclusively by the one-time Welcome Claim
+primitive. Identity is the wallet address. IP is secondary anti-abuse only.
 
 ```bash
 curl -X POST http://127.0.0.1:3015/v1/faucet/starter-pack   -H "Content-Type: application/json"   -d '{"address":"ecash:qzdq0q65fwnt94rlcph5kllj0xcry6e0v58zrgp7a3"}' | jq
+```
+
+```bash
+curl "http://127.0.0.1:3015/v1/faucet/starter-pack/config" | jq
+curl "http://127.0.0.1:3015/v1/faucet/starter-pack/status?address=ecash:qzdq0q65fwnt94rlcph5kllj0xcry6e0v58zrgp7a3" | jq
 ```
 
 Success response:
@@ -27,26 +35,20 @@ Success response:
 ```json
 {
   "ok": true,
+  "status": "completed",
   "address": "ecash:q...",
   "starterPack": {
     "xecSats": "100000",
-    "xec": "1000",
-    "rmzAtoms": "1"
+    "xec": "1000"
   },
-  "txids": {
-    "xec": "dryrun-xec-...",
-    "rmz": "dryrun-rmz-..."
-  },
-  "dryRun": true,
-  "nextSteps": [
-    "Open Tonalli Wallet",
-    "Register your .xec alias",
-    "Verify your identity at https://ecash.mx/identidad"
-  ]
+  "txid": "dryrun-xec-...",
+  "dryRun": true
 }
 ```
 
-Invalid addresses return HTTP 400 with `ok: false`. Repeated address or IP claims within the cooldown window return HTTP 429.
+The same address never receives a second real transfer. Ambiguous broadcast
+outcomes become `pending_review` and are not retried automatically. Invalid
+addresses return HTTP 400. Rate limits return `status: "rate_limited"`.
 
 ### Stats
 

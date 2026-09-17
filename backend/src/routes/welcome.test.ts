@@ -41,7 +41,7 @@ console.error = () => {};
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  if (url === process.env.BITCOIN_ABC_RPC_URL) {
+  if (url.includes("127.0.0.1:8332")) {
     rpcCalls += 1;
     if (!rpcHandler) throw new Error("Missing RPC handler");
     return rpcHandler();
@@ -59,7 +59,6 @@ after(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
   server.close();
-  db.close();
 });
 
 async function claim(): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -170,4 +169,78 @@ test("direccion invalida se rechaza antes de reservar o emitir", async () => {
   assert.equal(rpcCalls, 0);
   const count = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims").get() as { count: number };
   assert.equal(count.count, 0);
+});
+
+test("doble click secuencial no emite una segunda transferencia", async () => {
+  rpcHandler = rpcSuccess();
+  const first = await claim();
+  const second = await claim();
+  assert.equal(first.body.status, "completed");
+  assert.equal(second.body.status, "already_claimed");
+  assert.equal(second.body.txid, txid);
+  assert.equal(rpcCalls, 1);
+});
+
+test("respuesta perdida despues de broadcast se reconcilia sin pagar dos veces", async () => {
+  rpcHandler = rpcSuccess();
+  const first = await claim();
+  assert.equal(first.body.status, "completed");
+
+  const status = await originalFetch(
+    `${baseUrl}/v1/faucet/starter-pack/status?address=${encodeURIComponent(address)}`
+  );
+  const statusBody = await status.json() as Record<string, unknown>;
+  assert.equal(status.status, 200);
+  assert.equal(statusBody.status, "already_claimed");
+  assert.equal(statusBody.txid, txid);
+  assert.equal((statusBody.starterPack as { xec: string }).xec, "1000");
+
+  const retry = await claim();
+  assert.equal(retry.body.status, "already_claimed");
+  assert.equal(retry.body.txid, txid);
+  assert.equal(rpcCalls, 1);
+});
+
+test("config publica la cantidad autoritativa del backend", async () => {
+  const response = await originalFetch(`${baseUrl}/v1/faucet/starter-pack/config`);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(response.status, 200);
+  assert.equal(body.oneTimePerAddress, true);
+  assert.equal((body.starterPack as { xec: string }).xec, "1000");
+  assert.equal(rpcCalls, 0);
+});
+
+test("broadcast ambiguo por conexion perdida queda needs_review", async () => {
+  rpcHandler = rpcNetworkError("ECONNRESET", "socket hang up");
+  const first = await claim();
+  assert.equal(first.status, 202);
+  assert.equal(first.body.status, "pending_review");
+  rpcHandler = rpcSuccess();
+  const second = await claim();
+  assert.equal(second.body.status, "pending_review");
+  assert.equal(rpcCalls, 1);
+});
+
+test("txid ausente despues de RPC queda needs_review y no reintenta", async () => {
+  rpcHandler = async () => Response.json({ result: null, error: null, id: "tonalli-faucet-send" });
+  const first = await claim();
+  assert.equal(first.status, 202);
+  assert.equal(first.body.status, "pending_review");
+  rpcHandler = rpcSuccess();
+  const second = await claim();
+  assert.equal(second.body.status, "pending_review");
+  assert.equal(rpcCalls, 1);
+});
+
+test("carrera sobre failed_retryable reserva una sola transferencia", async () => {
+  rpcHandler = rpcNetworkError("ECONNREFUSED");
+  const first = await claim();
+  assert.equal(first.status, 503);
+
+  rpcHandler = rpcSuccess(40);
+  const [a, b] = await Promise.all([claim(), claim()]);
+  assert.equal(rpcCalls, 2);
+  const statuses = new Set([a.body.status, b.body.status]);
+  assert.equal(statuses.has("completed"), true);
+  assert.equal(statuses.has("pending_review") || statuses.has("already_claimed"), true);
 });
