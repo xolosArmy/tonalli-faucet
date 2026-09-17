@@ -207,6 +207,8 @@ test("config publica la cantidad autoritativa del backend", async () => {
   assert.equal(response.status, 200);
   assert.equal(body.oneTimePerAddress, true);
   assert.equal((body.starterPack as { xec: string }).xec, "1000");
+  assert.equal(body.turnstileRequired, false);
+  assert.equal(body.quickStartCompatible, true);
   assert.equal(rpcCalls, 0);
 });
 

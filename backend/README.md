@@ -46,6 +46,12 @@ Success response:
 }
 ```
 
+Quick Start Welcome XEC requires `TURNSTILE_ENABLED=false`. The config payload
+includes `turnstileRequired` and `quickStartCompatible`. If Turnstile is
+enabled, `POST /starter-pack` fails closed without sending XEC so the wallet UI
+cannot offer a button the backend would reject. One-time address identity and
+IP rate limits remain the anti-abuse controls for this path.
+
 The same address never receives a second real transfer. Ambiguous broadcast
 outcomes become `pending_review` and are not retried automatically. Invalid
 addresses return HTTP 400. Rate limits return `status: "rate_limited"`.
@@ -111,9 +117,16 @@ The server stores only HMAC IP hashes, using `IP_HASH_SECRET`.
 
 ## Turnstile
 
-When `TURNSTILE_ENABLED=false`, Turnstile is skipped.
+Welcome Quick Start (`GET/POST /v1/faucet/starter-pack*`) requires `TURNSTILE_ENABLED=false`. This gate does not integrate a Turnstile widget into RMZWallet. Anti-abuse for Welcome XEC is one-time address identity plus IP/rate limits.
 
-When `TURNSTILE_ENABLED=true`, requests to `/v1/faucet/starter-pack` must include `turnstileToken`. The server verifies it with Cloudflare Turnstile `siteverify`, includes `remoteip` when available, and fails closed when verification fails or Turnstile is misconfigured.
+If `TURNSTILE_ENABLED=true`:
+
+- process startup logs `Welcome Quick Start configuration rejected`
+- `GET /starter-pack/config` returns `turnstileRequired: true` and `quickStartCompatible: false`
+- `POST /starter-pack` fails closed with HTTP 503 and does not send XEC
+- RMZWallet hides `[ Recibir XEC ]` so the UI cannot offer a button the backend would reject
+
+Social `POST /claim` is a separate product and may still use Turnstile when enabled.
 
 ## CORS
 

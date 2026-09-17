@@ -34,6 +34,11 @@ test("welcome claim conserva dry-run, disable, rate-limit y turnstile fail-close
   assert.match(welcome, /config\.faucetDryRun/);
   assert.match(welcome, /welcomeIpLimiter/);
   assert.match(welcome, /status: "rate_limited"/);
+  assert.match(welcome, /isWelcomeQuickStartCompatible/);
+  assert.match(welcome, /WELCOME_TURNSTILE_INCOMPATIBLE_MESSAGE/);
+  assert.match(index, /isWelcomeQuickStartCompatible/);
+  assert.match(index, /Welcome Quick Start configuration rejected/);
+  assert.match(index, /crossOriginResourcePolicy/);
   assert.match(index, /corsOptions/);
   assert.match(turnstile, /Turnstile is enabled but not configured/);
 });

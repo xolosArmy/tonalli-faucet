@@ -16,6 +16,10 @@ import { isBitcoinAbcRpcError, sendXecToAddress } from "../services/bitcoinAbcRp
 import { verifyTurnstileToken } from "../services/turnstile.js";
 import { AppError, serverErrorMessage } from "../utils/errors.js";
 import { hashIp } from "../utils/ipHash.js";
+import {
+  WELCOME_TURNSTILE_INCOMPATIBLE_MESSAGE,
+  isWelcomeQuickStartCompatible
+} from "../welcomeQuickStartPolicy.js";
 
 export const welcomeRouter = Router();
 
@@ -133,11 +137,16 @@ welcomeRouter.get("/starter-pack/status", (req, res) => {
 });
 
 welcomeRouter.get("/starter-pack/config", (_req, res) => {
+  const quickStartCompatible = isWelcomeQuickStartCompatible({
+    turnstileEnabled: config.turnstileEnabled
+  });
   res.json({
     ok: true,
     enabled: config.faucetEnabled,
     oneTimePerAddress: true,
     dryRun: config.faucetDryRun,
+    turnstileRequired: config.turnstileEnabled,
+    quickStartCompatible,
     starterPack: starterPackPayload()
   });
 });
@@ -155,6 +164,10 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
   try {
     if (!config.faucetEnabled) {
       throw new AppError(503, "Faucet is temporarily disabled.");
+    }
+
+    if (!isWelcomeQuickStartCompatible({ turnstileEnabled: config.turnstileEnabled })) {
+      throw new AppError(503, WELCOME_TURNSTILE_INCOMPATIBLE_MESSAGE);
     }
 
     address = normalizeAddress(req.body?.address);
