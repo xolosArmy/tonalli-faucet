@@ -71,7 +71,10 @@ after(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
   server.close();
-  db.close();
+  // Do not db.close() here. Node 24's test runner tears down the isolate
+  // while better-sqlite3 Statement wrappers still hold cleanup hooks;
+  // closing the Database then aborting the isolate hits
+  // RemoveEnvironmentCleanupHook with env == nullptr (SIGABRT).
 });
 
 function responseJson(payload: unknown, status = 200): Response {
