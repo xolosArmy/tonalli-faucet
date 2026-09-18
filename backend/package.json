@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@xolosarmy/tonalli-core": "^0.1.0",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^12.9.0",
     "chronik-client": "^0.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
