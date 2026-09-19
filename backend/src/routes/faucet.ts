@@ -15,6 +15,7 @@ import {
   upsertClaim
 } from "../db.js";
 import { getWelcomeClaimStats } from "../welcomeClaims.js";
+import { isWelcomeQuickStartCompatible } from "../welcomeQuickStartPolicy.js";
 import { isBitcoinAbcRpcError, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
@@ -91,10 +92,14 @@ function starterPackPayload() {
 }
 
 faucetRouter.get("/health", (_req, res) => {
+  const quickStartCompatible = isWelcomeQuickStartCompatible({
+    turnstileEnabled: config.turnstileEnabled
+  });
   res.json({
     ok: true,
     service: "tonalli-faucet-api",
-    starterPackEnabled: config.faucetEnabled,
+    starterPackEnabled: config.faucetEnabled && quickStartCompatible,
+    quickStartCompatible,
     dryRun: config.faucetDryRun,
     turnstileEnabled: config.turnstileEnabled,
     cooldownDays: config.faucetCooldownDays,

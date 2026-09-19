@@ -310,6 +310,26 @@ test("un TXID valido termina en completed", async () => {
   assert.notEqual(row.completed_at, null);
 });
 
+test("GET /health no anuncia starter pack cuando Welcome Quick Start es incompatible", async () => {
+  const { config } = await import("../config.js");
+  const previous = config.turnstileEnabled;
+  (config as { turnstileEnabled: boolean }).turnstileEnabled = true;
+  try {
+    const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
+    const body = await response.json() as {
+      starterPackEnabled: boolean;
+      quickStartCompatible: boolean;
+      turnstileEnabled: boolean;
+    };
+    assert.equal(response.status, 200);
+    assert.equal(body.turnstileEnabled, true);
+    assert.equal(body.quickStartCompatible, false);
+    assert.equal(body.starterPackEnabled, false);
+  } finally {
+    (config as { turnstileEnabled: boolean }).turnstileEnabled = previous;
+  }
+});
+
 test("GET /stats agrega welcome, legacy starter pack y social", async () => {
   const now = new Date().toISOString();
   insertStarterPackClaim({

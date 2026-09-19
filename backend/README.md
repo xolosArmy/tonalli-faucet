@@ -103,27 +103,23 @@ Legacy variables such as `CORS_ORIGIN` and `SQLITE_PATH` are still accepted as f
 
 ## Dry Run Mode
 
-`FAUCET_DRY_RUN=true` is the default and recommended deployment setting for Phase B1.1 validation. In dry-run mode the service:
+`FAUCET_DRY_RUN=true` is the default for Welcome XEC. In dry-run mode the service:
 
 - validates the `ecash:` address
 - rejects `tokenaddr:` and invalid addresses
-- applies address and IP cooldown rules
-- writes a `starter_pack_claims` record
-- returns simulated txids prefixed with `dryrun-xec-` and `dryrun-rmz-`
+- writes a `welcome_claims` row with status `dry_run_completed`
+- returns a simulated txid prefixed with `dryrun-xec-`
 - does not broadcast transactions or require faucet wallet funds
 
-Live XEC sending uses Bitcoin ABC `sendtoaddress`. Live RMZ token sending is intentionally scaffolded but not enabled because the backend does not yet have a safe token-send implementation. Keep `FAUCET_DRY_RUN=true` until that path is implemented and reviewed.
+A later restart against the same database with `FAUCET_DRY_RUN=false` may send **one** real Welcome XEC to a previously dry-run address. A real `completed` row never receives another broadcast.
+
+Live Welcome XEC uses Bitcoin ABC `sendtoaddress` only. This path does not send RMZ.
 
 ## Anti-Abuse Rules
 
-Starter-pack claims are stored in the existing SQLite database at `FAUCET_DB_PATH`. The table `starter_pack_claims` records address, IP hash, user agent, timestamps, txids, status, and dry-run state.
+Welcome claims are stored at `FAUCET_DB_PATH` in `welcome_claims`. Identity is the wallet address: at most one real broadcast per address, except a retry when broadcast is proven impossible (`failed_retryable`). IP hash and rate limits are secondary anti-abuse. The server stores only HMAC IP hashes, using `IP_HASH_SECRET`.
 
-Cooldown rules:
-
-- one starter pack per address every `FAUCET_COOLDOWN_DAYS`
-- one starter pack per IP hash every `FAUCET_COOLDOWN_DAYS`
-
-The server stores only HMAC IP hashes, using `IP_HASH_SECRET`.
+Historical `starter_pack_claims` rows with a real `xecTxid` are adopted as already claimed and are not paid again. `FAUCET_COOLDOWN_DAYS` applies to the separate social `/claim` product, not to Welcome XEC.
 
 ## Turnstile
 
