@@ -19,6 +19,17 @@ test("welcome.ts es la autoridad de POST /starter-pack", () => {
   assert.match(source, /broadcastMayHaveOccurred/);
 });
 
+test("welcome_claims adopta filas legacy funded y distingue dry-run de completed real", () => {
+  const claims = readFileSync(join(here, "../welcomeClaims.ts"), "utf8");
+  const faucet = readFileSync(join(here, "faucet.ts"), "utf8");
+  assert.match(claims, /adoptLegacyFundedStarterPackClaims/);
+  assert.match(claims, /starter_pack_claims/);
+  assert.match(claims, /status = 'dry_run_completed'/);
+  assert.match(claims, /xecTxid NOT LIKE 'dryrun-%'/);
+  assert.match(faucet, /legacyStarterPack/);
+  assert.match(faucet, /welcome: getWelcomeClaimStats/);
+});
+
 test("index monta welcomeRouter antes de faucetRouter", () => {
   const source = readFileSync(join(here, "../index.ts"), "utf8");
   const welcomeMount = source.indexOf('app.use("/v1/faucet", welcomeRouter)');

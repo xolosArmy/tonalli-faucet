@@ -6,6 +6,7 @@ import {
   completeSocialClaim,
   getClaim,
   getSocialAuthSession,
+  getSocialClaimStats,
   getStarterPackStats,
   insertClaimEvent,
   markSocialClaimFailed,
@@ -13,6 +14,7 @@ import {
   reserveSocialClaim,
   upsertClaim
 } from "../db.js";
+import { getWelcomeClaimStats } from "../welcomeClaims.js";
 import { isBitcoinAbcRpcError, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
@@ -103,7 +105,11 @@ faucetRouter.get("/health", (_req, res) => {
 });
 
 faucetRouter.get("/stats", (_req, res) => {
-  res.json(getStarterPackStats());
+  res.json({
+    social: getSocialClaimStats(),
+    legacyStarterPack: getStarterPackStats(),
+    welcome: getWelcomeClaimStats()
+  });
 });
 
 // POST /starter-pack is owned exclusively by welcomeRouter (one-time Welcome XEC).

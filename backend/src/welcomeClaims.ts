@@ -7,6 +7,13 @@ export type WelcomeClaimStatus =
   | "needs_review"
   | "dry_run_completed";
 
+const LEGACY_FUNDED_PREDICATE = `
+  xecTxid IS NOT NULL
+  AND TRIM(xecTxid) != ''
+  AND xecTxid NOT LIKE 'dryrun-%'
+  AND IFNULL(dryRun, 0) = 0
+`;
+
 export type WelcomeClaimRow = {
   address: string;
   ipHash: string;
@@ -40,6 +47,36 @@ db.exec(`
     ON welcome_claims (ipHash, updatedAt);
 `);
 
+const adoptLegacyFundedStatement = db.prepare(`
+  INSERT OR IGNORE INTO welcome_claims (
+    address, ipHash, userAgent, createdAt, updatedAt, xecTxid, status, dryRun, error
+  )
+  SELECT
+    sp.address,
+    sp.ipHash,
+    sp.userAgent,
+    sp.createdAt,
+    sp.createdAt,
+    sp.xecTxid,
+    'completed',
+    0,
+    NULL
+  FROM starter_pack_claims AS sp
+  INNER JOIN (
+    SELECT address, MAX(id) AS id
+    FROM starter_pack_claims
+    WHERE ${LEGACY_FUNDED_PREDICATE}
+      AND (? IS NULL OR address = ?)
+    GROUP BY address
+  ) AS latest ON latest.id = sp.id
+`);
+
+export function adoptLegacyFundedStarterPackClaims(address?: string): number {
+  return Number(adoptLegacyFundedStatement.run(address ?? null, address ?? null).changes);
+}
+
+adoptLegacyFundedStarterPackClaims();
+
 function getWelcomeClaimUnsafe(address: string): WelcomeClaimRow | undefined {
   return db.prepare("SELECT * FROM welcome_claims WHERE address = ?").get(address) as
     | WelcomeClaimRow
@@ -47,6 +84,7 @@ function getWelcomeClaimUnsafe(address: string): WelcomeClaimRow | undefined {
 }
 
 export function getWelcomeClaim(address: string): WelcomeClaimRow | undefined {
+  adoptLegacyFundedStarterPackClaims(address);
   return getWelcomeClaimUnsafe(address);
 }
 
@@ -57,7 +95,9 @@ const reserveTransaction = db.transaction((params: {
   now: string;
   dryRun: boolean;
 }): WelcomeClaimReservation => {
-  const retry = db.prepare(`
+  adoptLegacyFundedStarterPackClaims(params.address);
+
+  const retryFailed = db.prepare(`
     UPDATE welcome_claims
     SET ipHash = ?, userAgent = ?, updatedAt = ?, xecTxid = NULL,
         status = 'pending', dryRun = ?, error = NULL
@@ -70,8 +110,26 @@ const reserveTransaction = db.transaction((params: {
     params.address
   );
 
-  if (retry.changes === 1) {
+  if (retryFailed.changes === 1) {
     return { kind: "reserved", claim: getWelcomeClaimUnsafe(params.address)! };
+  }
+
+  if (!params.dryRun) {
+    const retryDryRun = db.prepare(`
+      UPDATE welcome_claims
+      SET ipHash = ?, userAgent = ?, updatedAt = ?, xecTxid = NULL,
+          status = 'pending', dryRun = 0, error = NULL
+      WHERE address = ? AND status = 'dry_run_completed'
+    `).run(
+      params.ipHash,
+      params.userAgent ?? null,
+      params.now,
+      params.address
+    );
+
+    if (retryDryRun.changes === 1) {
+      return { kind: "reserved", claim: getWelcomeClaimUnsafe(params.address)! };
+    }
   }
 
   const insert = db.prepare(`

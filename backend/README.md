@@ -62,7 +62,17 @@ addresses return HTTP 400. Rate limits return `status: "rate_limited"`.
 curl http://127.0.0.1:3015/v1/faucet/stats | jq
 ```
 
-Only aggregate counts are returned: `totalClaims`, `completedClaims`, `failedClaims`, and `dryRunClaims`. The endpoint does not expose IP hashes, user agents, mnemonics, private keys, or raw database rows.
+The endpoint reports the current operational authorities without dropping legacy observability:
+
+```json
+{
+  "social": { "total": 0, "completed": 0, "pending": 0, "needsReview": 0, "failed": 0 },
+  "legacyStarterPack": { "totalClaims": 0, "completedClaims": 0, "failedClaims": 0, "dryRunClaims": 0 },
+  "welcome": { "total": 0, "completed": 0, "pending": 0, "needsReview": 0, "retryable": 0, "dryRun": 0 }
+}
+```
+
+`welcome.completed` is real Welcome XEC broadcasts. `welcome.dryRun` is simulated-only claims. `legacyStarterPack` preserves historical starter-pack rows. The endpoint does not expose IP hashes, user agents, mnemonics, private keys, or raw database rows.
 
 Existing routes under `/api/v1/status` and `/api/v1/faucet/claim` are preserved. The new routes are also available under `/api/v1/faucet` for compatibility.
 

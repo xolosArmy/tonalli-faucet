@@ -73,14 +73,34 @@ function starterPackPayload() {
 }
 
 function publicClaimState(claim: WelcomeClaimRow) {
-  if (claim.status === "completed" || claim.status === "dry_run_completed") {
+  if (claim.status === "completed") {
     return {
       ok: true,
       status: "already_claimed",
       address: claim.address,
       starterPack: starterPackPayload(),
       txid: claim.xecTxid,
-      dryRun: claim.dryRun === 1
+      dryRun: false
+    };
+  }
+
+  if (claim.status === "dry_run_completed") {
+    if (config.faucetDryRun) {
+      return {
+        ok: true,
+        status: "already_claimed",
+        address: claim.address,
+        starterPack: starterPackPayload(),
+        txid: claim.xecTxid,
+        dryRun: true
+      };
+    }
+    return {
+      ok: true,
+      status: "available",
+      address: claim.address,
+      starterPack: starterPackPayload(),
+      dryRun: false
     };
   }
 

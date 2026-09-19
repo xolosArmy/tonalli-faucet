@@ -13,9 +13,14 @@ process.env.TURNSTILE_ENABLED = "false";
 process.env.IP_HASH_SECRET = "welcome-test-ip-secret";
 process.env.STARTER_XEC_SATS = "100000";
 
-const { db } = await import("../db.js");
+const { db, insertStarterPackClaim } = await import("../db.js");
 const { welcomeRouter } = await import("./welcome.js");
 const { AppError } = await import("../utils/errors.js");
+const { config } = await import("../config.js");
+const {
+  adoptLegacyFundedStarterPackClaims,
+  getWelcomeClaim
+} = await import("../welcomeClaims.js");
 
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
@@ -49,10 +54,17 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): P
   return originalFetch(input as RequestInfo | URL, init);
 }) as typeof fetch;
 
+function setFaucetDryRun(value: boolean): boolean {
+  const previous = config.faucetDryRun;
+  (config as { faucetDryRun: boolean }).faucetDryRun = value;
+  return previous;
+}
+
 beforeEach(() => {
-  db.exec("DELETE FROM welcome_claims;");
+  db.exec("DELETE FROM welcome_claims; DELETE FROM starter_pack_claims;");
   rpcCalls = 0;
   rpcHandler = null;
+  setFaucetDryRun(false);
 });
 
 after(() => {
@@ -231,6 +243,116 @@ test("txid ausente despues de RPC queda needs_review y no reintenta", async () =
   rpcHandler = rpcSuccess();
   const second = await claim();
   assert.equal(second.body.status, "pending_review");
+  assert.equal(rpcCalls, 1);
+});
+
+function insertLegacyFunded(params: {
+  status: "completed" | "xec_sent" | "failed";
+  xecTxid: string | null;
+  dryRun?: boolean;
+  address?: string;
+}): void {
+  insertStarterPackClaim({
+    address: params.address ?? address,
+    ipHash: "legacy-ip",
+    createdAt: new Date().toISOString(),
+    xecTxid: params.xecTxid,
+    status: params.status,
+    dryRun: params.dryRun ?? false
+  });
+}
+
+test("legacy completed + xecTxid se adopta como already_claimed sin RPC", async () => {
+  insertLegacyFunded({ status: "completed", xecTxid: txid });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.body.status, "already_claimed");
+  assert.equal(rpcCalls, 0);
+});
+
+test("legacy xec_sent + xecTxid se adopta como already_claimed sin RPC", async () => {
+  insertLegacyFunded({ status: "xec_sent", xecTxid: txid });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.body.status, "already_claimed");
+  assert.equal(rpcCalls, 0);
+});
+
+test("legacy failed + xecTxid se adopta como already_claimed sin RPC", async () => {
+  insertLegacyFunded({ status: "failed", xecTxid: txid });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.body.status, "already_claimed");
+  assert.equal(rpcCalls, 0);
+});
+
+test("legacy failed sin txid no se importa como funded y puede reclamar una vez", async () => {
+  insertLegacyFunded({ status: "failed", xecTxid: null });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.status, 200);
+  assert.equal(result.body.status, "completed");
+  assert.equal(rpcCalls, 1);
+});
+
+test("legacy dry-run no se importa como funded", async () => {
+  insertLegacyFunded({
+    status: "completed",
+    xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    dryRun: true
+  });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.body.status, "completed");
+  assert.equal(rpcCalls, 1);
+});
+
+test("adopcion legacy es idempotente y no duplica filas", async () => {
+  insertLegacyFunded({ status: "completed", xecTxid: txid });
+  const first = adoptLegacyFundedStarterPackClaims();
+  const second = adoptLegacyFundedStarterPackClaims();
+  assert.equal(first, 1);
+  assert.equal(second, 0);
+  const count = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims").get() as { count: number };
+  assert.equal(count.count, 1);
+  assert.equal(getWelcomeClaim(address)?.status, "completed");
+});
+
+test("dry-run completed permite un claim live posterior y luego already_claimed", async () => {
+  setFaucetDryRun(true);
+  const dry = await claim();
+  assert.equal(dry.status, 200);
+  assert.equal(dry.body.dryRun, true);
+  assert.equal(getWelcomeClaim(address)?.status, "dry_run_completed");
+  assert.equal(rpcCalls, 0);
+
+  setFaucetDryRun(false);
+  rpcHandler = rpcSuccess();
+  const live = await claim();
+  assert.equal(live.status, 200);
+  assert.equal(live.body.status, "completed");
+  assert.equal(live.body.dryRun, false);
+  assert.equal(rpcCalls, 1);
+
+  const again = await claim();
+  assert.equal(again.body.status, "already_claimed");
+  assert.equal(rpcCalls, 1);
+});
+
+test("un completed real no vuelve a emitir al cambiar dry-run/live", async () => {
+  rpcHandler = rpcSuccess();
+  const live = await claim();
+  assert.equal(live.body.status, "completed");
+  assert.equal(rpcCalls, 1);
+
+  setFaucetDryRun(true);
+  const dry = await claim();
+  assert.equal(dry.body.status, "already_claimed");
+  assert.equal(rpcCalls, 1);
+
+  setFaucetDryRun(false);
+  const again = await claim();
+  assert.equal(again.body.status, "already_claimed");
   assert.equal(rpcCalls, 1);
 });
 
