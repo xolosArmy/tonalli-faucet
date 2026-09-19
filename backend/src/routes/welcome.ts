@@ -20,6 +20,7 @@ import {
   WELCOME_TURNSTILE_INCOMPATIBLE_MESSAGE,
   isWelcomeQuickStartCompatible
 } from "../welcomeQuickStartPolicy.js";
+import { parseWelcomePayout } from "../welcomePayout.js";
 
 export const welcomeRouter = Router();
 
@@ -55,20 +56,12 @@ function normalizeAddress(raw: unknown): string {
   return address;
 }
 
-function xecFromSats(sats: string): string {
-  if (!/^\d+$/.test(sats) || BigInt(sats) <= 0n) {
-    throw new AppError(500, "STARTER_XEC_SATS must be a positive integer.");
-  }
-  const value = BigInt(sats);
-  const whole = value / 100n;
-  const remainder = value % 100n;
-  return remainder === 0n ? whole.toString() : `${whole}.${remainder.toString().padStart(2, "0")}`;
-}
-
 function starterPackPayload() {
+  const payout = parseWelcomePayout(config.starterXecSats);
   return {
-    xecSats: config.starterXecSats,
-    xec: xecFromSats(config.starterXecSats)
+    xecSats: payout.xecSats,
+    xec: payout.xec,
+    rpcAmount: payout.rpcAmount
   };
 }
 
@@ -224,7 +217,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
     }
 
     try {
-      const txid = await sendXecToAddress(address, starterPack.xec);
+      const txid = await sendXecToAddress(address, starterPack.rpcAmount);
       const completed = completeWelcomeClaim({
         address,
         txid,

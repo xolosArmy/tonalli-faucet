@@ -370,6 +370,59 @@ test("STARTER_XEC_SATS invalido se rechaza antes de reservar", async () => {
   }
 });
 
+test("STARTER_XEC_SATS enorme se rechaza antes de reservar y no llama RPC", async () => {
+  const previous = config.starterXecSats;
+  const huge = `1${"0".repeat(399)}`;
+  (config as { starterXecSats: string }).starterXecSats = huge;
+  rpcHandler = rpcSuccess();
+  try {
+    const result = await claim();
+    assert.equal(result.status, 500);
+    assert.equal(rpcCalls, 0);
+    assert.equal(getWelcomeClaim(address), undefined);
+    const count = db.prepare("SELECT COUNT(*) AS n FROM welcome_claims").get() as { n: number };
+    assert.equal(count.n, 0);
+  } finally {
+    (config as { starterXecSats: string }).starterXecSats = previous;
+  }
+});
+
+test("STARTER_XEC_SATS que produce Infinity se rechaza antes de reservar", async () => {
+  const previous = config.starterXecSats;
+  (config as { starterXecSats: string }).starterXecSats = "9".repeat(400);
+  rpcHandler = rpcSuccess();
+  try {
+    const result = await claim();
+    assert.equal(result.status, 500);
+    assert.equal(rpcCalls, 0);
+    assert.equal(getWelcomeClaim(address), undefined);
+  } finally {
+    (config as { starterXecSats: string }).starterXecSats = previous;
+  }
+});
+
+test("payout valido de 100000 sats envia 1000 XEC y tras config invalida la misma address puede reclamar", async () => {
+  const previous = config.starterXecSats;
+  rpcHandler = rpcSuccess();
+  (config as { starterXecSats: string }).starterXecSats = "1" + "0".repeat(399);
+  const blocked = await claim();
+  assert.equal(blocked.status, 500);
+  assert.equal(rpcCalls, 0);
+  assert.equal(getWelcomeClaim(address), undefined);
+
+  (config as { starterXecSats: string }).starterXecSats = "100000";
+  const live = await claim();
+  assert.equal(live.status, 200);
+  assert.equal(live.body.status, "completed");
+  assert.equal((live.body.starterPack as { xec: string; xecSats: string; rpcAmount: number }).xec, "1000");
+  assert.equal((live.body.starterPack as { xecSats: string }).xecSats, "100000");
+  assert.equal((live.body.starterPack as { rpcAmount: number }).rpcAmount, 1000);
+  assert.equal(rpcCalls, 1);
+  assert.ok(getWelcomeClaim(address));
+
+  (config as { starterXecSats: string }).starterXecSats = previous;
+});
+
 test("carrera sobre failed_retryable reserva una sola transferencia", async () => {
   rpcHandler = rpcNetworkError("ECONNREFUSED");
   const first = await claim();
