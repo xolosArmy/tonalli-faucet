@@ -19,7 +19,8 @@ process.env.TELEGRAM_TARGET_CHAT_ID = "-1001234567890";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-secret";
 process.env.IP_HASH_SECRET = "test-ip-hash-secret";
 
-const { db, completeSocialClaim, createSocialAuthSession, markSocialClaimFailed, markSocialClaimNeedsReview, reserveSocialClaim, verifySocialAuthSession } = await import("../db.js");
+const { db, completeSocialClaim, createSocialAuthSession, insertStarterPackClaim, markSocialClaimFailed, markSocialClaimNeedsReview, reserveSocialClaim, verifySocialAuthSession } = await import("../db.js");
+const { completeWelcomeClaim, reserveWelcomeClaim } = await import("../welcomeClaims.js");
 const { faucetRouter } = await import("./faucet.js");
 const { FAUCET_MAINTENANCE_MESSAGE } = await import("../services/bitcoinAbcRpc.js");
 
@@ -63,7 +64,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): P
 }) as typeof fetch;
 
 beforeEach(() => {
-  db.exec("DELETE FROM claim_events; DELETE FROM claims; DELETE FROM social_auth_sessions; DELETE FROM social_claims;");
+  db.exec("DELETE FROM claim_events; DELETE FROM claims; DELETE FROM social_auth_sessions; DELETE FROM social_claims; DELETE FROM welcome_claims; DELETE FROM starter_pack_claims;");
   rpcScenario = null;
 });
 
@@ -71,7 +72,10 @@ after(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
   server.close();
-  db.close();
+  // Do not db.close() here. Node 24's test runner tears down the isolate
+  // while better-sqlite3 Statement wrappers still hold cleanup hooks;
+  // closing the Database then aborting the isolate hits
+  // RemoveEnvironmentCleanupHook with env == nullptr (SIGABRT).
 });
 
 function responseJson(payload: unknown, status = 200): Response {
@@ -304,6 +308,78 @@ test("un TXID valido termina en completed", async () => {
   assert.equal(row.status, "completed");
   assert.equal(row.txid, txid);
   assert.notEqual(row.completed_at, null);
+});
+
+test("GET /health no anuncia starter pack cuando Welcome Quick Start es incompatible", async () => {
+  const { config } = await import("../config.js");
+  const previous = config.turnstileEnabled;
+  (config as { turnstileEnabled: boolean }).turnstileEnabled = true;
+  try {
+    const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
+    const body = await response.json() as {
+      starterPackEnabled: boolean;
+      quickStartCompatible: boolean;
+      turnstileEnabled: boolean;
+    };
+    assert.equal(response.status, 200);
+    assert.equal(body.turnstileEnabled, true);
+    assert.equal(body.quickStartCompatible, false);
+    assert.equal(body.starterPackEnabled, false);
+  } finally {
+    (config as { turnstileEnabled: boolean }).turnstileEnabled = previous;
+  }
+});
+
+test("GET /stats agrega welcome, legacy starter pack y social", async () => {
+  const now = new Date().toISOString();
+  insertStarterPackClaim({
+    address,
+    ipHash: "legacy-stats",
+    createdAt: now,
+    xecTxid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    status: "completed",
+    dryRun: false
+  });
+  const welcomeAddress = "ecash:qz2708636snqhsxu8wnlka78h6fdp77ar59j2t0fh2";
+  reserveWelcomeClaim({
+    address: welcomeAddress,
+    ipHash: "welcome-stats",
+    now,
+    dryRun: false
+  });
+  completeWelcomeClaim({
+    address: welcomeAddress,
+    txid: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    now,
+    dryRun: false
+  });
+  const dryAddress = "ecash:qracc65ppv9x2k0g0h9l5v3n7w8q0r1s2t3u4v5w6x7";
+  reserveWelcomeClaim({
+    address: dryAddress,
+    ipHash: "dry-stats",
+    now,
+    dryRun: true
+  });
+  completeWelcomeClaim({
+    address: dryAddress,
+    txid: "dryrun-xec-statsfixtureaaaaaaaaaaaaaaaaaaaaaaaa",
+    now,
+    dryRun: true
+  });
+
+  const response = await originalFetch(`${baseUrl}/v1/faucet/stats`);
+  const body = await response.json() as {
+    social: { total: number };
+    legacyStarterPack: { completedClaims: number };
+    welcome: { completed: number; dryRun: number; total: number };
+  };
+
+  assert.equal(response.status, 200);
+  assert.equal(body.legacyStarterPack.completedClaims, 1);
+  assert.equal(body.welcome.completed, 1);
+  assert.equal(body.welcome.dryRun, 1);
+  assert.equal(body.welcome.total, 2);
+  assert.ok("total" in body.social);
 });
 
 function responseScenario(payload: unknown): RpcScenario {
