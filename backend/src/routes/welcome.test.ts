@@ -356,6 +356,20 @@ test("un completed real no vuelve a emitir al cambiar dry-run/live", async () =>
   assert.equal(rpcCalls, 1);
 });
 
+test("STARTER_XEC_SATS invalido se rechaza antes de reservar", async () => {
+  const previous = config.starterXecSats;
+  (config as { starterXecSats: string }).starterXecSats = "0";
+  rpcHandler = rpcSuccess();
+  try {
+    const result = await claim();
+    assert.equal(result.status, 500);
+    assert.equal(rpcCalls, 0);
+    assert.equal(getWelcomeClaim(address), undefined);
+  } finally {
+    (config as { starterXecSats: string }).starterXecSats = previous;
+  }
+});
+
 test("carrera sobre failed_retryable reserva una sola transferencia", async () => {
   rpcHandler = rpcNetworkError("ECONNREFUSED");
   const first = await claim();

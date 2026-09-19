@@ -193,6 +193,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
     address = normalizeAddress(req.body?.address);
     const turnstileToken = typeof req.body?.turnstileToken === "string" ? req.body.turnstileToken : undefined;
     await verifyTurnstileToken(turnstileToken, req.ip);
+    const starterPack = starterPackPayload();
 
     const reservation = reserveWelcomeClaim({
       address,
@@ -215,7 +216,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
         ok: true,
         status: "completed",
         address,
-        starterPack: starterPackPayload(),
+        starterPack,
         txid,
         dryRun: true
       });
@@ -223,7 +224,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
     }
 
     try {
-      const txid = await sendXecToAddress(address, starterPackPayload().xec);
+      const txid = await sendXecToAddress(address, starterPack.xec);
       const completed = completeWelcomeClaim({
         address,
         txid,
@@ -241,7 +242,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
           ok: false,
           status: "pending_review",
           address,
-          starterPack: starterPackPayload(),
+          starterPack,
           txid,
           dryRun: false,
           message: "La transferencia fue emitida pero su registro local requiere conciliacion. No se volvera a enviar automaticamente."
@@ -253,7 +254,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
         ok: true,
         status: "completed",
         address,
-        starterPack: starterPackPayload(),
+        starterPack,
         txid,
         dryRun: false
       });
@@ -273,7 +274,7 @@ welcomeRouter.post("/starter-pack", welcomeIpLimiter, welcomeAddressLimiter, asy
         ok: false,
         status: "pending_review",
         address,
-        starterPack: starterPackPayload(),
+        starterPack,
         dryRun: false,
         message: "No pudimos confirmar el resultado del envio. Tonalli no realizara otra transferencia hasta conciliar este reclamo."
       });

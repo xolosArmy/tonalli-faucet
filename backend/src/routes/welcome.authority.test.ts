@@ -17,6 +17,8 @@ test("welcome.ts es la autoridad de POST /starter-pack", () => {
   assert.match(source, /welcomeRouter\.post\("\/starter-pack"/);
   assert.match(source, /reserveWelcomeClaim/);
   assert.match(source, /broadcastMayHaveOccurred/);
+  const post = source.slice(source.indexOf('welcomeRouter.post("/starter-pack"'));
+  assert.ok(post.indexOf("starterPackPayload()") < post.indexOf("reserveWelcomeClaim"));
 });
 
 test("welcome_claims adopta filas legacy funded y distingue dry-run de completed real", () => {
