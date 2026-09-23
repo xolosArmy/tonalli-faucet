@@ -14,6 +14,14 @@ const LEGACY_FUNDED_PREDICATE = `
   AND IFNULL(dryRun, 0) = 0
 `;
 
+const LEGACY_UNRESOLVED_PREDICATE = `
+  IFNULL(dryRun, 0) = 0
+  AND status IN ('pending', 'failed')
+  AND (xecTxid IS NULL OR TRIM(xecTxid) = '')
+`;
+
+export const LEGACY_STARTER_PACK_UNRESOLVED = "LEGACY_STARTER_PACK_UNRESOLVED";
+
 export type WelcomeClaimRow = {
   address: string;
   ipHash: string;
@@ -45,6 +53,14 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_welcome_claims_ipHash_updatedAt
     ON welcome_claims (ipHash, updatedAt);
+
+  CREATE TRIGGER IF NOT EXISTS block_legacy_live_starter_pack_after_welcome
+  BEFORE INSERT ON starter_pack_claims
+  WHEN IFNULL(NEW.dryRun, 0) = 0
+    AND EXISTS (SELECT 1 FROM welcome_claims WHERE address = NEW.address)
+  BEGIN
+    SELECT RAISE(ABORT, 'WELCOME_CLAIM_AUTHORITY_EXISTS');
+  END;
 `);
 
 const adoptLegacyFundedStatement = db.prepare(`
@@ -85,7 +101,52 @@ export function adoptLegacyFundedStarterPackClaims(address?: string): number {
   return Number(adoptLegacyFundedStatement.run(address ?? null, address ?? null).changes);
 }
 
-adoptLegacyFundedStarterPackClaims();
+const reconcileLegacyUnresolvedStatement = db.prepare(`
+  INSERT INTO welcome_claims (
+    address, ipHash, userAgent, createdAt, updatedAt, xecTxid, status, dryRun, error
+  )
+  SELECT
+    sp.address,
+    sp.ipHash,
+    sp.userAgent,
+    sp.createdAt,
+    sp.createdAt,
+    NULL,
+    'needs_review',
+    0,
+    ?
+  FROM starter_pack_claims AS sp
+  INNER JOIN (
+    SELECT address, MAX(id) AS id
+    FROM starter_pack_claims
+    WHERE ${LEGACY_UNRESOLVED_PREDICATE}
+      AND (? IS NULL OR address = ?)
+    GROUP BY address
+  ) AS latest ON latest.id = sp.id
+  -- Disambiguate the UPSERT clause from the JOIN condition in SQLite.
+  WHERE true
+  ON CONFLICT(address) DO UPDATE SET
+    xecTxid = NULL,
+    status = 'needs_review',
+    dryRun = 0,
+    error = excluded.error
+  WHERE welcome_claims.status IN ('failed_retryable', 'dry_run_completed', 'pending')
+`);
+
+export function reconcileLegacyUnresolvedStarterPackClaims(address?: string): number {
+  return Number(reconcileLegacyUnresolvedStatement.run(
+    LEGACY_STARTER_PACK_UNRESOLVED,
+    address ?? null,
+    address ?? null
+  ).changes);
+}
+
+function reconcileLegacyStarterPackClaims(address?: string): void {
+  adoptLegacyFundedStarterPackClaims(address);
+  reconcileLegacyUnresolvedStarterPackClaims(address);
+}
+
+db.transaction(() => reconcileLegacyStarterPackClaims())();
 
 function getWelcomeClaimUnsafe(address: string): WelcomeClaimRow | undefined {
   return db.prepare("SELECT * FROM welcome_claims WHERE address = ?").get(address) as
@@ -94,7 +155,7 @@ function getWelcomeClaimUnsafe(address: string): WelcomeClaimRow | undefined {
 }
 
 export function getWelcomeClaim(address: string): WelcomeClaimRow | undefined {
-  adoptLegacyFundedStarterPackClaims(address);
+  reconcileLegacyStarterPackClaims(address);
   return getWelcomeClaimUnsafe(address);
 }
 
@@ -105,7 +166,7 @@ const reserveTransaction = db.transaction((params: {
   now: string;
   dryRun: boolean;
 }): WelcomeClaimReservation => {
-  adoptLegacyFundedStarterPackClaims(params.address);
+  reconcileLegacyStarterPackClaims(params.address);
 
   const retryFailed = db.prepare(`
     UPDATE welcome_claims

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, beforeEach, test } from "node:test";
 import express from "express";
 import type { AddressInfo } from "node:net";
+import Database from "better-sqlite3";
 
 process.env.BITCOIN_ABC_RPC_URL = "http://rpc-user:rpc-pass@127.0.0.1:8332";
 process.env.FAUCET_DB_PATH = `/tmp/tonalli-welcome-test-${process.pid}.sqlite`;
@@ -20,8 +21,11 @@ const { config } = await import("../config.js");
 const {
   adoptLegacyFundedStarterPackClaims,
   getWelcomeClaim,
+  LEGACY_STARTER_PACK_UNRESOLVED,
+  reconcileLegacyUnresolvedStarterPackClaims,
   reserveWelcomeClaim
 } = await import("../welcomeClaims.js");
+const oldConnection = new Database(config.sqlitePath);
 
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
@@ -272,6 +276,33 @@ function insertLegacyFunded(params: {
   });
 }
 
+// Seed rows that coexist in a database created before the cross-version trigger.
+function insertHistoricalLegacyFunded(params: Parameters<typeof insertLegacyFunded>[0]): void {
+  const trigger = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'trigger' AND name = 'block_legacy_live_starter_pack_after_welcome'
+  `).get() as { sql: string } | undefined;
+  assert.ok(trigger);
+  db.exec("DROP TRIGGER block_legacy_live_starter_pack_after_welcome");
+  try {
+    insertLegacyFunded(params);
+  } finally {
+    db.exec(`${trigger.sql};`);
+  }
+}
+
+function insertOldLiveClaim(
+  status: "pending" | "failed",
+  xecTxid: string | null = null,
+  rowAddress = address
+): number {
+  const result = oldConnection.prepare(`
+    INSERT INTO starter_pack_claims (address, ipHash, createdAt, xecTxid, status, dryRun)
+    VALUES (?, 'old-instance-ip', ?, ?, ?, 0)
+  `).run(rowAddress, new Date().toISOString(), xecTxid, status);
+  return Number(result.lastInsertRowid);
+}
+
 function rawWelcomeClaim(): { status: string; xecTxid: string | null; dryRun: number; error: string | null } | undefined {
   return db.prepare("SELECT status, xecTxid, dryRun, error FROM welcome_claims WHERE address = ?")
     .get(address) as { status: string; xecTxid: string | null; dryRun: number; error: string | null } | undefined;
@@ -301,13 +332,90 @@ test("legacy failed + xecTxid se adopta como already_claimed sin RPC", async () 
   assert.equal(rpcCalls, 0);
 });
 
-test("legacy failed sin txid no se importa como funded y puede reclamar una vez", async () => {
+test("legacy live failed sin txid queda needs_review y no emite Welcome", async () => {
   insertLegacyFunded({ status: "failed", xecTxid: null });
   rpcHandler = rpcSuccess();
   const result = await claim();
-  assert.equal(result.status, 200);
-  assert.equal(result.body.status, "completed");
-  assert.equal(rpcCalls, 1);
+  assert.equal(result.status, 202);
+  assert.equal(result.body.status, "pending_review");
+  assert.equal(rawWelcomeClaim()?.status, "needs_review");
+  assert.equal(rawWelcomeClaim()?.error, LEGACY_STARTER_PACK_UNRESOLVED);
+  assert.equal(rpcCalls, 0);
+  const again = await claim();
+  assert.equal(again.status, 202);
+  assert.equal(again.body.status, "pending_review");
+  assert.equal(rpcCalls, 0);
+});
+
+test("old connection pending wins first, blocks Welcome, then funded UPDATE resolves barrier", async () => {
+  const legacyId = insertOldLiveClaim("pending");
+  const reservation = reserveWelcomeClaim({
+    address,
+    ipHash: "welcome-test-ip",
+    now: new Date().toISOString(),
+    dryRun: false
+  });
+  assert.equal(reservation.kind, "existing");
+  assert.equal(reservation.claim.status, "needs_review");
+  assert.equal(reservation.claim.error, LEGACY_STARTER_PACK_UNRESOLVED);
+
+  const blocked = await claim();
+  const stillBlocked = await claim();
+  assert.equal(blocked.status, 202);
+  assert.equal(blocked.body.status, "pending_review");
+  assert.equal(stillBlocked.status, 202);
+  assert.equal(rpcCalls, 0);
+
+  const updated = oldConnection.prepare(`
+    UPDATE starter_pack_claims SET status = 'xec_sent', xecTxid = ? WHERE id = ?
+  `).run(legacyTxid, legacyId);
+  assert.equal(updated.changes, 1);
+  const resolved = await claim();
+  assert.equal(resolved.status, 200);
+  assert.equal(resolved.body.status, "already_claimed");
+  assert.equal(resolved.body.txid, legacyTxid);
+  assert.deepEqual(rawWelcomeClaim(), { status: "completed", xecTxid: legacyTxid, dryRun: 0, error: null });
+  assert.equal(rpcCalls, 0);
+});
+
+test("Welcome reservation wins first and persistent trigger rejects old live INSERT", () => {
+  const reservation = reserveWelcomeClaim({
+    address,
+    ipHash: "welcome-test-ip",
+    now: new Date().toISOString(),
+    dryRun: false
+  });
+  assert.equal(reservation.kind, "reserved");
+  assert.throws(() => insertOldLiveClaim("pending"), /WELCOME_CLAIM_AUTHORITY_EXISTS/);
+  const legacyCount = db.prepare("SELECT COUNT(*) AS count FROM starter_pack_claims WHERE address = ?")
+    .get(address) as { count: number };
+  const welcomeCount = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims WHERE address = ?")
+    .get(address) as { count: number };
+  assert.equal(legacyCount.count, 0);
+  assert.equal(welcomeCount.count, 1);
+  assert.equal(rawWelcomeClaim()?.status, "pending");
+  assert.equal(rpcCalls, 0);
+});
+
+test("bulk startup reconciliation blocks unresolved legacy before any POST and is idempotent", async () => {
+  const failedAddress = `${address}-legacy-failed`;
+  insertOldLiveClaim("pending");
+  insertOldLiveClaim("failed", null, failedAddress);
+  assert.equal(reconcileLegacyUnresolvedStarterPackClaims(), 2);
+  assert.equal(reconcileLegacyUnresolvedStarterPackClaims(), 0);
+  assert.equal(reconcileLegacyUnresolvedStarterPackClaims(), 0);
+  for (const rowAddress of [address, failedAddress]) {
+    const row = db.prepare("SELECT status, error FROM welcome_claims WHERE address = ?")
+      .get(rowAddress);
+    assert.deepEqual(row, { status: "needs_review", error: LEGACY_STARTER_PACK_UNRESOLVED });
+  }
+  const count = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims").get() as { count: number };
+  assert.equal(count.count, 2);
+  assert.equal(getWelcomeClaim(address)?.status, "needs_review");
+  const blocked = await claim();
+  assert.equal(blocked.status, 202);
+  assert.equal(blocked.body.status, "pending_review");
+  assert.equal(rpcCalls, 0);
 });
 
 test("legacy dry-run no se importa como funded", async () => {
@@ -318,6 +426,18 @@ test("legacy dry-run no se importa como funded", async () => {
   });
   rpcHandler = rpcSuccess();
   const result = await claim();
+  assert.equal(result.body.status, "completed");
+  assert.equal(rpcCalls, 1);
+});
+
+test("legacy dryrun txid with live flag does not create an unresolved barrier", async () => {
+  insertLegacyFunded({
+    status: "failed",
+    xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  });
+  rpcHandler = rpcSuccess();
+  const result = await claim();
+  assert.equal(result.status, 200);
   assert.equal(result.body.status, "completed");
   assert.equal(rpcCalls, 1);
 });
@@ -340,7 +460,7 @@ test("late legacy funded supersedes failed_retryable before Welcome retry", asyn
   assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
   assert.equal(rpcCalls, 1);
 
-  insertLegacyFunded({ status: "failed", xecTxid: legacyTxid });
+  insertHistoricalLegacyFunded({ status: "failed", xecTxid: legacyTxid });
   assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
   rpcHandler = rpcSuccess();
   const retry = await claim();
@@ -358,7 +478,7 @@ test("late legacy funded supersedes dry_run_completed before live Welcome", asyn
   assert.equal(rawWelcomeClaim()?.status, "dry_run_completed");
   assert.equal(rpcCalls, 0);
 
-  insertLegacyFunded({ status: "xec_sent", xecTxid: legacyTxid });
+  insertHistoricalLegacyFunded({ status: "xec_sent", xecTxid: legacyTxid });
   setFaucetDryRun(false);
   rpcHandler = rpcSuccess();
   const live = await claim();
@@ -376,7 +496,7 @@ test("late legacy funded resolves needs_review without another RPC", async () =>
   assert.equal(rawWelcomeClaim()?.status, "needs_review");
   assert.equal(rpcCalls, 1);
 
-  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  insertHistoricalLegacyFunded({ status: "completed", xecTxid: legacyTxid });
   rpcHandler = rpcSuccess();
   const retry = await claim();
   assert.equal(retry.status, 200);
@@ -396,7 +516,7 @@ test("late legacy funded supersedes pending before a new reservation decision", 
   assert.equal(pending.kind, "reserved");
   assert.equal(rawWelcomeClaim()?.status, "pending");
 
-  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  insertHistoricalLegacyFunded({ status: "completed", xecTxid: legacyTxid });
   rpcHandler = rpcSuccess();
   const retry = await claim();
   assert.equal(retry.status, 200);
@@ -413,7 +533,7 @@ test("existing completed Welcome keeps its txid when conflicting legacy funding 
   assert.equal(rawWelcomeClaim()?.xecTxid, txid);
   assert.equal(rpcCalls, 1);
 
-  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  insertHistoricalLegacyFunded({ status: "completed", xecTxid: legacyTxid });
   const retry = await claim();
   assert.equal(retry.body.status, "already_claimed");
   assert.equal(retry.body.txid, txid);
@@ -429,7 +549,7 @@ test("late legacy dry-run evidence does not block a failed_retryable Welcome", a
 
   insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dryRun: true });
   insertLegacyFunded({ status: "completed", xecTxid: legacyTxid, dryRun: true });
-  insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", dryRun: false });
+  insertHistoricalLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", dryRun: false });
   assert.equal(adoptLegacyFundedStarterPackClaims(address), 0);
   assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
   rpcHandler = rpcSuccess();
@@ -441,20 +561,34 @@ test("late legacy dry-run evidence does not block a failed_retryable Welcome", a
   assert.equal(rpcCalls, 2);
 });
 
-test("late legacy null and empty txids do not supersede failed_retryable", async () => {
+test("historical legacy failed without txid converts failed_retryable to a review barrier", async () => {
   rpcHandler = rpcNetworkError("ECONNREFUSED");
   assert.equal((await claim()).status, 503);
-  insertLegacyFunded({ status: "failed", xecTxid: null });
-  insertLegacyFunded({ status: "completed", xecTxid: "" });
+  insertHistoricalLegacyFunded({ status: "failed", xecTxid: null });
+  insertHistoricalLegacyFunded({ status: "failed", xecTxid: "" });
   assert.equal(adoptLegacyFundedStarterPackClaims(address), 0);
   assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
 
   rpcHandler = rpcSuccess();
   const retry = await claim();
-  assert.equal(retry.status, 200);
-  assert.equal(retry.body.status, "completed");
-  assert.equal(retry.body.txid, txid);
-  assert.equal(rpcCalls, 2);
+  assert.equal(retry.status, 202);
+  assert.equal(retry.body.status, "pending_review");
+  assert.equal(rawWelcomeClaim()?.status, "needs_review");
+  assert.equal(rawWelcomeClaim()?.error, LEGACY_STARTER_PACK_UNRESOLVED);
+  assert.equal(rpcCalls, 1);
+});
+
+test("native Welcome needs_review keeps its own evidence beside unresolved legacy", async () => {
+  rpcHandler = rpcNetworkError("ETIMEDOUT", "request timed out");
+  assert.equal((await claim()).status, 202);
+  const nativeError = rawWelcomeClaim()?.error;
+  assert.notEqual(nativeError, LEGACY_STARTER_PACK_UNRESOLVED);
+
+  insertHistoricalLegacyFunded({ status: "failed", xecTxid: null });
+  assert.equal(reconcileLegacyUnresolvedStarterPackClaims(address), 0);
+  assert.equal(getWelcomeClaim(address)?.status, "needs_review");
+  assert.equal(rawWelcomeClaim()?.error, nativeError);
+  assert.equal(rpcCalls, 1);
 });
 
 test("bulk startup adoption promotes every non-terminal state and is idempotent", () => {
@@ -466,7 +600,7 @@ test("bulk startup adoption promotes every non-terminal state and is idempotent"
       INSERT INTO welcome_claims (address, ipHash, createdAt, updatedAt, status, dryRun, error)
       VALUES (?, 'welcome-test-ip', ?, ?, ?, ?, 'previous-error')
     `).run(rowAddress, now, now, status, status === "dry_run_completed" ? 1 : 0);
-    insertLegacyFunded({ status: "completed", xecTxid: legacyTxid, address: rowAddress });
+    insertHistoricalLegacyFunded({ status: "completed", xecTxid: legacyTxid, address: rowAddress });
   }
 
   assert.equal(adoptLegacyFundedStarterPackClaims(), statuses.length);
@@ -483,14 +617,23 @@ test("bulk startup adoption promotes every non-terminal state and is idempotent"
   assert.equal(rpcCalls, 0);
 });
 
-test("adoption selects latest real funded record despite newer unfunded legacy rows", () => {
+test("real funded evidence wins over a newer live pending legacy row", () => {
   insertLegacyFunded({ status: "completed", xecTxid: txid });
   insertLegacyFunded({ status: "xec_sent", xecTxid: legacyTxid });
   insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dryRun: true });
   insertLegacyFunded({ status: "failed", xecTxid: null });
-  assert.equal(adoptLegacyFundedStarterPackClaims(), 1);
+  insertOldLiveClaim("pending");
+  const reservation = reserveWelcomeClaim({
+    address,
+    ipHash: "welcome-test-ip",
+    now: new Date().toISOString(),
+    dryRun: false
+  });
+  assert.equal(reservation.kind, "existing");
+  assert.equal(reservation.claim.status, "completed");
   assert.equal(rawWelcomeClaim()?.status, "completed");
   assert.equal(rawWelcomeClaim()?.xecTxid, legacyTxid);
+  assert.equal(reconcileLegacyUnresolvedStarterPackClaims(address), 0);
   assert.equal(rpcCalls, 0);
 });
 
