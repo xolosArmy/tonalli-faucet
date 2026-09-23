@@ -19,13 +19,15 @@ const { AppError } = await import("../utils/errors.js");
 const { config } = await import("../config.js");
 const {
   adoptLegacyFundedStarterPackClaims,
-  getWelcomeClaim
+  getWelcomeClaim,
+  reserveWelcomeClaim
 } = await import("../welcomeClaims.js");
 
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
 const address = "ecash:qzdq0q65fwnt94rlcph5kllj0xcry6e0v58zrgp7a3";
 const txid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const legacyTxid = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
 let rpcCalls = 0;
 let rpcRequestBodies: string[] = [];
@@ -270,6 +272,11 @@ function insertLegacyFunded(params: {
   });
 }
 
+function rawWelcomeClaim(): { status: string; xecTxid: string | null; dryRun: number; error: string | null } | undefined {
+  return db.prepare("SELECT status, xecTxid, dryRun, error FROM welcome_claims WHERE address = ?")
+    .get(address) as { status: string; xecTxid: string | null; dryRun: number; error: string | null } | undefined;
+}
+
 test("legacy completed + xecTxid se adopta como already_claimed sin RPC", async () => {
   insertLegacyFunded({ status: "completed", xecTxid: txid });
   rpcHandler = rpcSuccess();
@@ -324,6 +331,167 @@ test("adopcion legacy es idempotente y no duplica filas", async () => {
   const count = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims").get() as { count: number };
   assert.equal(count.count, 1);
   assert.equal(getWelcomeClaim(address)?.status, "completed");
+});
+
+test("late legacy funded supersedes failed_retryable before Welcome retry", async () => {
+  rpcHandler = rpcNetworkError("ECONNREFUSED");
+  const failed = await claim();
+  assert.equal(failed.status, 503);
+  assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
+  assert.equal(rpcCalls, 1);
+
+  insertLegacyFunded({ status: "failed", xecTxid: legacyTxid });
+  assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
+  rpcHandler = rpcSuccess();
+  const retry = await claim();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.status, "already_claimed");
+  assert.equal(retry.body.txid, legacyTxid);
+  assert.deepEqual(rawWelcomeClaim(), { status: "completed", xecTxid: legacyTxid, dryRun: 0, error: null });
+  assert.equal(rpcCalls, 1);
+});
+
+test("late legacy funded supersedes dry_run_completed before live Welcome", async () => {
+  setFaucetDryRun(true);
+  const dry = await claim();
+  assert.equal(dry.status, 200);
+  assert.equal(rawWelcomeClaim()?.status, "dry_run_completed");
+  assert.equal(rpcCalls, 0);
+
+  insertLegacyFunded({ status: "xec_sent", xecTxid: legacyTxid });
+  setFaucetDryRun(false);
+  rpcHandler = rpcSuccess();
+  const live = await claim();
+  assert.equal(live.status, 200);
+  assert.equal(live.body.status, "already_claimed");
+  assert.equal(live.body.txid, legacyTxid);
+  assert.deepEqual(rawWelcomeClaim(), { status: "completed", xecTxid: legacyTxid, dryRun: 0, error: null });
+  assert.equal(rpcCalls, 0);
+});
+
+test("late legacy funded resolves needs_review without another RPC", async () => {
+  rpcHandler = rpcNetworkError("ETIMEDOUT", "request timed out");
+  const pendingReview = await claim();
+  assert.equal(pendingReview.status, 202);
+  assert.equal(rawWelcomeClaim()?.status, "needs_review");
+  assert.equal(rpcCalls, 1);
+
+  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  rpcHandler = rpcSuccess();
+  const retry = await claim();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.status, "already_claimed");
+  assert.equal(retry.body.txid, legacyTxid);
+  assert.deepEqual(rawWelcomeClaim(), { status: "completed", xecTxid: legacyTxid, dryRun: 0, error: null });
+  assert.equal(rpcCalls, 1);
+});
+
+test("late legacy funded supersedes pending before a new reservation decision", async () => {
+  const pending = reserveWelcomeClaim({
+    address,
+    ipHash: "welcome-test-ip",
+    now: new Date().toISOString(),
+    dryRun: false
+  });
+  assert.equal(pending.kind, "reserved");
+  assert.equal(rawWelcomeClaim()?.status, "pending");
+
+  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  rpcHandler = rpcSuccess();
+  const retry = await claim();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.status, "already_claimed");
+  assert.equal(retry.body.txid, legacyTxid);
+  assert.equal(rawWelcomeClaim()?.status, "completed");
+  assert.equal(rpcCalls, 0);
+});
+
+test("existing completed Welcome keeps its txid when conflicting legacy funding appears", async () => {
+  rpcHandler = rpcSuccess();
+  const completed = await claim();
+  assert.equal(completed.status, 200);
+  assert.equal(rawWelcomeClaim()?.xecTxid, txid);
+  assert.equal(rpcCalls, 1);
+
+  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid });
+  const retry = await claim();
+  assert.equal(retry.body.status, "already_claimed");
+  assert.equal(retry.body.txid, txid);
+  assert.equal(rawWelcomeClaim()?.status, "completed");
+  assert.equal(rawWelcomeClaim()?.xecTxid, txid);
+  assert.equal(rpcCalls, 1);
+});
+
+test("late legacy dry-run evidence does not block a failed_retryable Welcome", async () => {
+  rpcHandler = rpcNetworkError("ECONNREFUSED");
+  assert.equal((await claim()).status, 503);
+  assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
+
+  insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dryRun: true });
+  insertLegacyFunded({ status: "completed", xecTxid: legacyTxid, dryRun: true });
+  insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", dryRun: false });
+  assert.equal(adoptLegacyFundedStarterPackClaims(address), 0);
+  assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
+  rpcHandler = rpcSuccess();
+  const retry = await claim();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.status, "completed");
+  assert.equal(retry.body.txid, txid);
+  assert.equal(rawWelcomeClaim()?.status, "completed");
+  assert.equal(rpcCalls, 2);
+});
+
+test("late legacy null and empty txids do not supersede failed_retryable", async () => {
+  rpcHandler = rpcNetworkError("ECONNREFUSED");
+  assert.equal((await claim()).status, 503);
+  insertLegacyFunded({ status: "failed", xecTxid: null });
+  insertLegacyFunded({ status: "completed", xecTxid: "" });
+  assert.equal(adoptLegacyFundedStarterPackClaims(address), 0);
+  assert.equal(rawWelcomeClaim()?.status, "failed_retryable");
+
+  rpcHandler = rpcSuccess();
+  const retry = await claim();
+  assert.equal(retry.status, 200);
+  assert.equal(retry.body.status, "completed");
+  assert.equal(retry.body.txid, txid);
+  assert.equal(rpcCalls, 2);
+});
+
+test("bulk startup adoption promotes every non-terminal state and is idempotent", () => {
+  const statuses = ["failed_retryable", "dry_run_completed", "pending", "needs_review"] as const;
+  const now = new Date().toISOString();
+  for (const status of statuses) {
+    const rowAddress = `${address}-${status}`;
+    db.prepare(`
+      INSERT INTO welcome_claims (address, ipHash, createdAt, updatedAt, status, dryRun, error)
+      VALUES (?, 'welcome-test-ip', ?, ?, ?, ?, 'previous-error')
+    `).run(rowAddress, now, now, status, status === "dry_run_completed" ? 1 : 0);
+    insertLegacyFunded({ status: "completed", xecTxid: legacyTxid, address: rowAddress });
+  }
+
+  assert.equal(adoptLegacyFundedStarterPackClaims(), statuses.length);
+  for (const status of statuses) {
+    const row = db.prepare("SELECT status, xecTxid, dryRun, error FROM welcome_claims WHERE address = ?")
+      .get(`${address}-${status}`);
+    assert.deepEqual(row, { status: "completed", xecTxid: legacyTxid, dryRun: 0, error: null });
+  }
+  assert.equal(adoptLegacyFundedStarterPackClaims(), 0);
+  assert.equal(adoptLegacyFundedStarterPackClaims(), 0);
+  const count = db.prepare("SELECT COUNT(*) AS count FROM welcome_claims").get() as { count: number };
+  assert.equal(count.count, statuses.length);
+  assert.equal(reserveWelcomeClaim({ address: `${address}-pending`, ipHash: "welcome-test-ip", now, dryRun: false }).kind, "existing");
+  assert.equal(rpcCalls, 0);
+});
+
+test("adoption selects latest real funded record despite newer unfunded legacy rows", () => {
+  insertLegacyFunded({ status: "completed", xecTxid: txid });
+  insertLegacyFunded({ status: "xec_sent", xecTxid: legacyTxid });
+  insertLegacyFunded({ status: "completed", xecTxid: "dryrun-xec-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", dryRun: true });
+  insertLegacyFunded({ status: "failed", xecTxid: null });
+  assert.equal(adoptLegacyFundedStarterPackClaims(), 1);
+  assert.equal(rawWelcomeClaim()?.status, "completed");
+  assert.equal(rawWelcomeClaim()?.xecTxid, legacyTxid);
+  assert.equal(rpcCalls, 0);
 });
 
 test("dry-run completed permite un claim live posterior y luego already_claimed", async () => {

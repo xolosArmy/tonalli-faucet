@@ -48,7 +48,7 @@ db.exec(`
 `);
 
 const adoptLegacyFundedStatement = db.prepare(`
-  INSERT OR IGNORE INTO welcome_claims (
+  INSERT INTO welcome_claims (
     address, ipHash, userAgent, createdAt, updatedAt, xecTxid, status, dryRun, error
   )
   SELECT
@@ -69,6 +69,16 @@ const adoptLegacyFundedStatement = db.prepare(`
       AND (? IS NULL OR address = ?)
     GROUP BY address
   ) AS latest ON latest.id = sp.id
+  -- Disambiguate the UPSERT clause from the JOIN condition in SQLite.
+  WHERE true
+  ON CONFLICT(address) DO UPDATE SET
+    xecTxid = excluded.xecTxid,
+    status = 'completed',
+    dryRun = 0,
+    error = NULL
+  WHERE welcome_claims.status IN (
+    'failed_retryable', 'dry_run_completed', 'pending', 'needs_review'
+  )
 `);
 
 export function adoptLegacyFundedStarterPackClaims(address?: string): number {
