@@ -1,10 +1,10 @@
 # Tonalli Faucet Backend
 
-TypeScript Express backend for Tonalli Faucet. Phase B1.1 adds Starter Pack Guardian RMZ:
+TypeScript Express backend for Tonalli Faucet. The current starter-pack flow provides a one-time Welcome XEC claim for new Tonalli wallets.
 
-> Primero te damos chispa para encender tu identidad. Despues decides cuanto quieres participar.
+> Primero te damos chispa para encender tu identidad. Después decides cuánto quieres participar.
 
-The starter pack gives a new wallet a small XEC gas balance plus an initial RMZ token amount for ecosystem belonging.
+The Welcome starter pack provides a small XEC balance. `POST /v1/faucet/starter-pack` distributes XEC only.
 
 ## Endpoints
 

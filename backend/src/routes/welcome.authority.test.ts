@@ -44,6 +44,11 @@ test("index monta welcomeRouter antes de faucetRouter", () => {
 
 test("README describe welcome_claims y no el starter pack XEC+RMZ como autoridad actual", () => {
   const readme = readFileSync(join(here, "../../README.md"), "utf8");
+  const overview = readme.slice(0, readme.indexOf("## Endpoints"));
+  assert.match(overview, /Welcome XEC/);
+  assert.match(overview, /starter-pack` distributes XEC only/);
+  assert.doesNotMatch(overview, /Phase B1\.1 adds Starter Pack Guardian RMZ/);
+  assert.doesNotMatch(overview, /plus an initial RMZ token amount/);
   assert.match(readme, /welcome_claims/);
   assert.match(readme, /real Welcome XEC/);
   assert.doesNotMatch(readme, /writes a `starter_pack_claims` record/);
