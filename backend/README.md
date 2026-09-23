@@ -89,13 +89,12 @@ FAUCET_DRY_RUN=true
 FAUCET_MNEMONIC=
 
 STARTER_XEC_SATS=100000
-STARTER_RMZ_ATOMS=1
 RMZ_TOKEN_ID=c923bd0f09c630c5e9980cf518c8d34b6353802a3cb7c3f34fa7cc85c9305908
 
 TURNSTILE_ENABLED=false
 TURNSTILE_SECRET_KEY=
 
-FAUCET_COOLDOWN_DAYS=30
+ADDRESS_COOLDOWN_HOURS=24
 FAUCET_DB_PATH=data/faucet.sqlite
 ```
 
@@ -119,7 +118,7 @@ Live Welcome XEC uses Bitcoin ABC `sendtoaddress` only. This path does not send 
 
 Welcome claims are stored at `FAUCET_DB_PATH` in `welcome_claims`. Identity is the wallet address: at most one real broadcast per address, except a retry when broadcast is proven impossible (`failed_retryable`). IP hash and rate limits are secondary anti-abuse. The server stores only HMAC IP hashes, using `IP_HASH_SECRET`.
 
-Historical `starter_pack_claims` rows with a real `xecTxid` are adopted as already claimed and are not paid again. `FAUCET_COOLDOWN_DAYS` applies to the separate social `/claim` product, not to Welcome XEC.
+Historical `starter_pack_claims` rows with a real `xecTxid` are adopted as already claimed and are not paid again. `ADDRESS_COOLDOWN_HOURS` controls the address cooldown for social `POST /claim`. Welcome XEC remains one-time-per-address and does not use this cooldown.
 
 ## Turnstile
 

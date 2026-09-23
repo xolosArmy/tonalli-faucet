@@ -18,8 +18,12 @@ process.env.TELEGRAM_BOT_USERNAME = "tonalli_test_bot";
 process.env.TELEGRAM_TARGET_CHAT_ID = "-1001234567890";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-secret";
 process.env.IP_HASH_SECRET = "test-ip-hash-secret";
+process.env.STARTER_XEC_SATS = "100000";
+process.env.STARTER_RMZ_ATOMS = "invalid-for-retired-welcome-rmz";
 
 const { db, completeSocialClaim, createSocialAuthSession, insertStarterPackClaim, markSocialClaimFailed, markSocialClaimNeedsReview, reserveSocialClaim, verifySocialAuthSession } = await import("../db.js");
+const { config } = await import("../config.js");
+const { parseWelcomePayout } = await import("../welcomePayout.js");
 const { completeWelcomeClaim, reserveWelcomeClaim } = await import("../welcomeClaims.js");
 const { faucetRouter } = await import("./faucet.js");
 const { FAUCET_MAINTENANCE_MESSAGE } = await import("../services/bitcoinAbcRpc.js");
@@ -310,8 +314,43 @@ test("un TXID valido termina en completed", async () => {
   assert.notEqual(row.completed_at, null);
 });
 
+test("GET /health anuncia Welcome XEC valido desde parseWelcomePayout", async () => {
+  const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(response.status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.starterPackEnabled, true);
+  assert.equal(body.welcomePayoutValid, true);
+  assert.deepEqual(body.starterPack, parseWelcomePayout("100000"));
+});
+
+test("GET /health ignora STARTER_RMZ_ATOMS invalido para Welcome XEC", async () => {
+  assert.equal(process.env.STARTER_RMZ_ATOMS, "invalid-for-retired-welcome-rmz");
+  const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
+  const body = await response.json() as Record<string, unknown>;
+  assert.equal(response.status, 200);
+  assert.equal(body.starterPackEnabled, true);
+  assert.equal((body.starterPack as { xec: string }).xec, "1000");
+  assert.equal("rmzAtoms" in (body.starterPack as object), false);
+});
+
+test("GET /health no anuncia Welcome con payout que pierde satoshis", async () => {
+  const previous = config.starterXecSats;
+  (config as { starterXecSats: string }).starterXecSats = "900719925474099101";
+  try {
+    const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.starterPackEnabled, false);
+    assert.equal(body.welcomePayoutValid, false);
+    assert.equal(body.starterPack, null);
+  } finally {
+    (config as { starterXecSats: string }).starterXecSats = previous;
+  }
+});
+
 test("GET /health no anuncia starter pack cuando Welcome Quick Start es incompatible", async () => {
-  const { config } = await import("../config.js");
   const previous = config.turnstileEnabled;
   (config as { turnstileEnabled: boolean }).turnstileEnabled = true;
   try {
@@ -320,13 +359,36 @@ test("GET /health no anuncia starter pack cuando Welcome Quick Start es incompat
       starterPackEnabled: boolean;
       quickStartCompatible: boolean;
       turnstileEnabled: boolean;
+      welcomePayoutValid: boolean;
     };
     assert.equal(response.status, 200);
     assert.equal(body.turnstileEnabled, true);
     assert.equal(body.quickStartCompatible, false);
+    assert.equal(body.welcomePayoutValid, true);
     assert.equal(body.starterPackEnabled, false);
   } finally {
     (config as { turnstileEnabled: boolean }).turnstileEnabled = previous;
+  }
+});
+
+test("GET /health y social /claim usan ADDRESS_COOLDOWN_HOURS", async () => {
+  const previous = config.addressCooldownHours;
+  (config as { addressCooldownHours: number }).addressCooldownHours = 24;
+  try {
+    const healthResponse = await originalFetch(`${baseUrl}/v1/faucet/health`);
+    const health = await healthResponse.json() as Record<string, unknown>;
+    assert.equal(healthResponse.status, 200);
+    assert.equal(health.addressCooldownHours, 24);
+    assert.equal("cooldownDays" in health, false);
+
+    const success = responseScenario({ result: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", error: null, id: "tonalli-faucet-send" });
+    const first = await claimWithScenario("9901", success);
+    const second = await claimWithScenario("9902", success);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 429);
+    assert.match(second.body.error as string, /24 horas/);
+  } finally {
+    (config as { addressCooldownHours: number }).addressCooldownHours = previous;
   }
 });
 

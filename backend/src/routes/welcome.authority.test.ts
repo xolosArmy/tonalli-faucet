@@ -32,7 +32,7 @@ test("welcome_claims adopta filas legacy funded y distingue dry-run de completed
   assert.match(claims, /xecTxid NOT LIKE 'dryrun-%'/);
   assert.match(faucet, /legacyStarterPack/);
   assert.match(faucet, /welcome: getWelcomeClaimStats/);
-  assert.match(faucet, /starterPackEnabled: config.faucetEnabled && quickStartCompatible/);
+  assert.match(faucet, /starterPackEnabled: config.faucetEnabled && quickStartCompatible && welcomePayoutValid/);
 });
 
 test("index monta welcomeRouter antes de faucetRouter", () => {
@@ -48,6 +48,9 @@ test("README describe welcome_claims y no el starter pack XEC+RMZ como autoridad
   assert.match(readme, /real Welcome XEC/);
   assert.doesNotMatch(readme, /writes a `starter_pack_claims` record/);
   assert.doesNotMatch(readme, /dryrun-rmz-/);
+  assert.match(readme, /ADDRESS_COOLDOWN_HOURS=24/);
+  assert.match(readme, /ADDRESS_COOLDOWN_HOURS.*social `POST \/claim`/);
+  assert.doesNotMatch(readme, /FAUCET_COOLDOWN_DAYS/);
 });
 
 test("welcome claim conserva dry-run, disable, rate-limit y turnstile fail-closed", () => {

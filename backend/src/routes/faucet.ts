@@ -15,6 +15,7 @@ import {
   upsertClaim
 } from "../db.js";
 import { getWelcomeClaimStats } from "../welcomeClaims.js";
+import { parseWelcomePayout, type WelcomePayout } from "../welcomePayout.js";
 import { isWelcomeQuickStartCompatible } from "../welcomeQuickStartPolicy.js";
 import { isBitcoinAbcRpcError, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
@@ -63,49 +64,31 @@ function assertCooldown(lastClaimAt: string | null): void {
   }
 }
 
-function xecFromSats(sats: string): string {
-  const value = BigInt(sats);
-  if (value <= 0n) {
-    throw new AppError(500, "STARTER_XEC_SATS must be greater than zero.");
-  }
-  const whole = value / 100n;
-  const remainder = value % 100n;
-  return remainder === 0n ? whole.toString() : `${whole}.${remainder.toString().padStart(2, "0")}`;
-}
-
-function assertPositiveAtomAmount(value: string, name: string): void {
-  if (!/^\d+$/.test(value) || BigInt(value) <= 0n) {
-    throw new AppError(500, `${name} must be a positive integer.`);
-  }
-}
-
-function starterPackPayload() {
-  const xecSats = config.starterXecSats;
-  assertPositiveAtomAmount(xecSats, "STARTER_XEC_SATS");
-  assertPositiveAtomAmount(config.starterRmzAtoms, "STARTER_RMZ_ATOMS");
-
-  return {
-    xecSats,
-    xec: xecFromSats(xecSats),
-    rmzAtoms: config.starterRmzAtoms
-  };
-}
-
 faucetRouter.get("/health", (_req, res) => {
   const quickStartCompatible = isWelcomeQuickStartCompatible({
     turnstileEnabled: config.turnstileEnabled
   });
+  let welcomePayout: WelcomePayout | null;
+  try {
+    welcomePayout = parseWelcomePayout(config.starterXecSats);
+  } catch (error) {
+    if (!(error instanceof AppError)) throw error;
+    welcomePayout = null;
+  }
+  const welcomePayoutValid = welcomePayout !== null;
+
   res.json({
     ok: true,
     service: "tonalli-faucet-api",
-    starterPackEnabled: config.faucetEnabled && quickStartCompatible,
+    starterPackEnabled: config.faucetEnabled && quickStartCompatible && welcomePayoutValid,
     quickStartCompatible,
+    welcomePayoutValid,
     dryRun: config.faucetDryRun,
     turnstileEnabled: config.turnstileEnabled,
-    cooldownDays: config.faucetCooldownDays,
+    addressCooldownHours: config.addressCooldownHours,
     twitterGateEnabled: config.twitterGateEnabled,
     twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined,
-    starterPack: starterPackPayload()
+    starterPack: welcomePayout
   });
 });
 
