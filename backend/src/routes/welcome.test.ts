@@ -28,6 +28,7 @@ const address = "ecash:qzdq0q65fwnt94rlcph5kllj0xcry6e0v58zrgp7a3";
 const txid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 let rpcCalls = 0;
+let rpcRequestBodies: string[] = [];
 let rpcHandler: (() => Promise<Response>) | null = null;
 
 const app = express();
@@ -48,6 +49,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): P
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   if (url.includes("127.0.0.1:8332")) {
     rpcCalls += 1;
+    assert.equal(typeof init?.body, "string");
+    rpcRequestBodies.push(init?.body as string);
     if (!rpcHandler) throw new Error("Missing RPC handler");
     return rpcHandler();
   }
@@ -63,6 +66,7 @@ function setFaucetDryRun(value: boolean): boolean {
 beforeEach(() => {
   db.exec("DELETE FROM welcome_claims; DELETE FROM starter_pack_claims;");
   rpcCalls = 0;
+  rpcRequestBodies = [];
   rpcHandler = null;
   setFaucetDryRun(false);
 });
@@ -104,6 +108,10 @@ test("primer welcome claim emite exactamente 1,000 XEC", async () => {
   assert.equal(result.body.txid, txid);
   assert.equal(rpcCalls, 1);
   assert.equal((result.body.starterPack as { xec: string }).xec, "1000");
+  assert.match(rpcRequestBodies[0], /"params":\["ecash:[a-z0-9]+",1000\]/);
+  const rpcRequest = JSON.parse(rpcRequestBodies[0]) as { params: [string, unknown] };
+  assert.equal(typeof rpcRequest.params[1], "number");
+  assert.equal(JSON.stringify(rpcRequest.params[1]), "1000");
 });
 
 test("la misma address recibe already_claimed sin una segunda transferencia", async () => {
@@ -401,26 +409,31 @@ test("STARTER_XEC_SATS que produce Infinity se rechaza antes de reservar", async
   }
 });
 
-test("payout valido de 100000 sats envia 1000 XEC y tras config invalida la misma address puede reclamar", async () => {
+test("precision-loss config no reserva ni llama RPC; la misma address reclama con 100000 sats", async () => {
   const previous = config.starterXecSats;
   rpcHandler = rpcSuccess();
-  (config as { starterXecSats: string }).starterXecSats = "1" + "0".repeat(399);
-  const blocked = await claim();
-  assert.equal(blocked.status, 500);
-  assert.equal(rpcCalls, 0);
-  assert.equal(getWelcomeClaim(address), undefined);
+  try {
+    (config as { starterXecSats: string }).starterXecSats = "900719925474099101";
+    const blocked = await claim();
+    assert.equal(blocked.status, 500);
+    assert.equal(rpcCalls, 0);
+    assert.equal(getWelcomeClaim(address), undefined);
+    const count = db.prepare("SELECT COUNT(*) AS n FROM welcome_claims").get() as { n: number };
+    assert.equal(count.n, 0);
 
-  (config as { starterXecSats: string }).starterXecSats = "100000";
-  const live = await claim();
-  assert.equal(live.status, 200);
-  assert.equal(live.body.status, "completed");
-  assert.equal((live.body.starterPack as { xec: string; xecSats: string; rpcAmount: number }).xec, "1000");
-  assert.equal((live.body.starterPack as { xecSats: string }).xecSats, "100000");
-  assert.equal((live.body.starterPack as { rpcAmount: number }).rpcAmount, 1000);
-  assert.equal(rpcCalls, 1);
-  assert.ok(getWelcomeClaim(address));
-
-  (config as { starterXecSats: string }).starterXecSats = previous;
+    (config as { starterXecSats: string }).starterXecSats = "100000";
+    const live = await claim();
+    assert.equal(live.status, 200);
+    assert.equal(live.body.status, "completed");
+    assert.equal((live.body.starterPack as { xec: string; xecSats: string; rpcAmount: number }).xec, "1000");
+    assert.equal((live.body.starterPack as { xecSats: string }).xecSats, "100000");
+    assert.equal((live.body.starterPack as { rpcAmount: number }).rpcAmount, 1000);
+    assert.equal(rpcCalls, 1);
+    assert.match(rpcRequestBodies[0], /"params":\["ecash:[a-z0-9]+",1000\]/);
+    assert.equal(getWelcomeClaim(address)?.status, "completed");
+  } finally {
+    (config as { starterXecSats: string }).starterXecSats = previous;
+  }
 });
 
 test("carrera sobre failed_retryable reserva una sola transferencia", async () => {
