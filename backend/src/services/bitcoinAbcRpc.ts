@@ -129,9 +129,9 @@ function classifyRpcError(error: { code: number; message: string }): BitcoinAbcR
   return rpcFailure("unknown", true, `${detail}; broadcast status is unknown`);
 }
 
-export async function sendXecToAddress(address: string, amountXec: string | number): Promise<string> {
-  const amount = typeof amountXec === "number" ? amountXec : Number(amountXec);
-  if (!Number.isFinite(amount) || amount <= 0 || amount > Number.MAX_SAFE_INTEGER) {
+export async function sendXecToAddress(address: string, amountXec: string): Promise<string> {
+  const amount = Number(amountXec);
+  if (!Number.isFinite(amount) || amount <= 0) {
     throw new AppError(500, "Monto de faucet invalido");
   }
 

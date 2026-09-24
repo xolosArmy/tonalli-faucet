@@ -18,13 +18,8 @@ process.env.TELEGRAM_BOT_USERNAME = "tonalli_test_bot";
 process.env.TELEGRAM_TARGET_CHAT_ID = "-1001234567890";
 process.env.TELEGRAM_WEBHOOK_SECRET = "test-secret";
 process.env.IP_HASH_SECRET = "test-ip-hash-secret";
-process.env.STARTER_XEC_SATS = "100000";
-process.env.STARTER_RMZ_ATOMS = "invalid-for-retired-welcome-rmz";
 
-const { db, completeSocialClaim, createSocialAuthSession, insertStarterPackClaim, markSocialClaimFailed, markSocialClaimNeedsReview, reserveSocialClaim, verifySocialAuthSession } = await import("../db.js");
-const { config } = await import("../config.js");
-const { parseWelcomePayout } = await import("../welcomePayout.js");
-const { completeWelcomeClaim, reserveWelcomeClaim } = await import("../welcomeClaims.js");
+const { db, completeSocialClaim, createSocialAuthSession, markSocialClaimFailed, markSocialClaimNeedsReview, reserveSocialClaim, verifySocialAuthSession } = await import("../db.js");
 const { faucetRouter } = await import("./faucet.js");
 const { FAUCET_MAINTENANCE_MESSAGE } = await import("../services/bitcoinAbcRpc.js");
 
@@ -68,7 +63,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): P
 }) as typeof fetch;
 
 beforeEach(() => {
-  db.exec("DELETE FROM claim_events; DELETE FROM claims; DELETE FROM social_auth_sessions; DELETE FROM social_claims; DELETE FROM welcome_claims; DELETE FROM starter_pack_claims;");
+  db.exec("DELETE FROM claim_events; DELETE FROM claims; DELETE FROM social_auth_sessions; DELETE FROM social_claims;");
   rpcScenario = null;
 });
 
@@ -76,10 +71,7 @@ after(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
   server.close();
-  // Do not db.close() here. Node 24's test runner tears down the isolate
-  // while better-sqlite3 Statement wrappers still hold cleanup hooks;
-  // closing the Database then aborting the isolate hits
-  // RemoveEnvironmentCleanupHook with env == nullptr (SIGABRT).
+  db.close();
 });
 
 function responseJson(payload: unknown, status = 200): Response {
@@ -312,136 +304,6 @@ test("un TXID valido termina en completed", async () => {
   assert.equal(row.status, "completed");
   assert.equal(row.txid, txid);
   assert.notEqual(row.completed_at, null);
-});
-
-test("GET /health anuncia Welcome XEC valido desde parseWelcomePayout", async () => {
-  const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
-  const body = await response.json() as Record<string, unknown>;
-  assert.equal(response.status, 200);
-  assert.equal(body.ok, true);
-  assert.equal(body.starterPackEnabled, true);
-  assert.equal(body.welcomePayoutValid, true);
-  assert.deepEqual(body.starterPack, parseWelcomePayout("100000"));
-});
-
-test("GET /health ignora STARTER_RMZ_ATOMS invalido para Welcome XEC", async () => {
-  assert.equal(process.env.STARTER_RMZ_ATOMS, "invalid-for-retired-welcome-rmz");
-  const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
-  const body = await response.json() as Record<string, unknown>;
-  assert.equal(response.status, 200);
-  assert.equal(body.starterPackEnabled, true);
-  assert.equal((body.starterPack as { xec: string }).xec, "1000");
-  assert.equal("rmzAtoms" in (body.starterPack as object), false);
-});
-
-test("GET /health no anuncia Welcome con payout que pierde satoshis", async () => {
-  const previous = config.starterXecSats;
-  (config as { starterXecSats: string }).starterXecSats = "900719925474099101";
-  try {
-    const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
-    const body = await response.json() as Record<string, unknown>;
-    assert.equal(response.status, 200);
-    assert.equal(body.ok, true);
-    assert.equal(body.starterPackEnabled, false);
-    assert.equal(body.welcomePayoutValid, false);
-    assert.equal(body.starterPack, null);
-  } finally {
-    (config as { starterXecSats: string }).starterXecSats = previous;
-  }
-});
-
-test("GET /health no anuncia starter pack cuando Welcome Quick Start es incompatible", async () => {
-  const previous = config.turnstileEnabled;
-  (config as { turnstileEnabled: boolean }).turnstileEnabled = true;
-  try {
-    const response = await originalFetch(`${baseUrl}/v1/faucet/health`);
-    const body = await response.json() as {
-      starterPackEnabled: boolean;
-      quickStartCompatible: boolean;
-      turnstileEnabled: boolean;
-      welcomePayoutValid: boolean;
-    };
-    assert.equal(response.status, 200);
-    assert.equal(body.turnstileEnabled, true);
-    assert.equal(body.quickStartCompatible, false);
-    assert.equal(body.welcomePayoutValid, true);
-    assert.equal(body.starterPackEnabled, false);
-  } finally {
-    (config as { turnstileEnabled: boolean }).turnstileEnabled = previous;
-  }
-});
-
-test("GET /health y social /claim usan ADDRESS_COOLDOWN_HOURS", async () => {
-  const previous = config.addressCooldownHours;
-  (config as { addressCooldownHours: number }).addressCooldownHours = 24;
-  try {
-    const healthResponse = await originalFetch(`${baseUrl}/v1/faucet/health`);
-    const health = await healthResponse.json() as Record<string, unknown>;
-    assert.equal(healthResponse.status, 200);
-    assert.equal(health.addressCooldownHours, 24);
-    assert.equal("cooldownDays" in health, false);
-
-    const success = responseScenario({ result: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", error: null, id: "tonalli-faucet-send" });
-    const first = await claimWithScenario("9901", success);
-    const second = await claimWithScenario("9902", success);
-    assert.equal(first.status, 200);
-    assert.equal(second.status, 429);
-    assert.match(second.body.error as string, /24 horas/);
-  } finally {
-    (config as { addressCooldownHours: number }).addressCooldownHours = previous;
-  }
-});
-
-test("GET /stats agrega welcome, legacy starter pack y social", async () => {
-  const now = new Date().toISOString();
-  insertStarterPackClaim({
-    address,
-    ipHash: "legacy-stats",
-    createdAt: now,
-    xecTxid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    status: "completed",
-    dryRun: false
-  });
-  const welcomeAddress = "ecash:qz2708636snqhsxu8wnlka78h6fdp77ar59j2t0fh2";
-  reserveWelcomeClaim({
-    address: welcomeAddress,
-    ipHash: "welcome-stats",
-    now,
-    dryRun: false
-  });
-  completeWelcomeClaim({
-    address: welcomeAddress,
-    txid: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-    now,
-    dryRun: false
-  });
-  const dryAddress = "ecash:qracc65ppv9x2k0g0h9l5v3n7w8q0r1s2t3u4v5w6x7";
-  reserveWelcomeClaim({
-    address: dryAddress,
-    ipHash: "dry-stats",
-    now,
-    dryRun: true
-  });
-  completeWelcomeClaim({
-    address: dryAddress,
-    txid: "dryrun-xec-statsfixtureaaaaaaaaaaaaaaaaaaaaaaaa",
-    now,
-    dryRun: true
-  });
-
-  const response = await originalFetch(`${baseUrl}/v1/faucet/stats`);
-  const body = await response.json() as {
-    social: { total: number };
-    legacyStarterPack: { completedClaims: number };
-    welcome: { completed: number; dryRun: number; total: number };
-  };
-
-  assert.equal(response.status, 200);
-  assert.equal(body.legacyStarterPack.completedClaims, 1);
-  assert.equal(body.welcome.completed, 1);
-  assert.equal(body.welcome.dryRun, 1);
-  assert.equal(body.welcome.total, 2);
-  assert.ok("total" in body.social);
 });
 
 function responseScenario(payload: unknown): RpcScenario {

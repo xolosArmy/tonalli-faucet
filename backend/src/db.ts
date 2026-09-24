@@ -426,27 +426,3 @@ export function getStarterPackStats(): {
     dryRunClaims: number;
   };
 }
-
-export function getSocialClaimStats(): {
-  total: number;
-  completed: number;
-  pending: number;
-  needsReview: number;
-  failed: number;
-} {
-  return db.prepare(`
-    SELECT
-      COUNT(*) AS total,
-      COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0) AS completed,
-      COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
-      COALESCE(SUM(CASE WHEN status = 'needs_review' THEN 1 ELSE 0 END), 0) AS needsReview,
-      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
-    FROM social_claims
-  `).get() as {
-    total: number;
-    completed: number;
-    pending: number;
-    needsReview: number;
-    failed: number;
-  };
-}

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { isValidEcashAddress } from "@xolosarmy/tonalli-core";
@@ -6,23 +7,23 @@ import {
   completeSocialClaim,
   getClaim,
   getSocialAuthSession,
-  getSocialClaimStats,
+  getRecentStarterPackClaimByAddress,
+  getRecentStarterPackClaimByIpHash,
   getStarterPackStats,
   insertClaimEvent,
+  insertStarterPackClaim,
   markSocialClaimFailed,
   markSocialClaimNeedsReview,
   reserveSocialClaim,
+  updateStarterPackClaim,
   upsertClaim
 } from "../db.js";
-import { getWelcomeClaimStats } from "../welcomeClaims.js";
-import { parseWelcomePayout, type WelcomePayout } from "../welcomePayout.js";
-import { isWelcomeQuickStartCompatible } from "../welcomeQuickStartPolicy.js";
-import { isBitcoinAbcRpcError, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
+import { isBitcoinAbcRpcError, sendRmzToAddress, sendXecToAddress } from "../services/bitcoinAbcRpc.js";
 import { verifyRmzGate } from "../services/rmzGate.js";
 import { verifyTurnstileToken } from "../services/turnstile.js";
 import { cleanTwitterHandle, verifyRetweetAndGetUserId } from "../services/twitter.js";
 import { verifyTelegramMembership } from "../services/telegram.js";
-import { AppError, errorMessage } from "../utils/errors.js";
+import { AppError, errorMessage, serverErrorMessage } from "../utils/errors.js";
 import { hashIp } from "../utils/ipHash.js";
 
 export const faucetRouter = Router();
@@ -64,45 +65,175 @@ function assertCooldown(lastClaimAt: string | null): void {
   }
 }
 
-faucetRouter.get("/health", (_req, res) => {
-  const quickStartCompatible = isWelcomeQuickStartCompatible({
-    turnstileEnabled: config.turnstileEnabled
-  });
-  let welcomePayout: WelcomePayout | null;
-  try {
-    welcomePayout = parseWelcomePayout(config.starterXecSats);
-  } catch (error) {
-    if (!(error instanceof AppError)) throw error;
-    welcomePayout = null;
+function xecFromSats(sats: string): string {
+  const value = BigInt(sats);
+  if (value <= 0n) {
+    throw new AppError(500, "STARTER_XEC_SATS must be greater than zero.");
   }
-  const welcomePayoutValid = welcomePayout !== null;
+  const whole = value / 100n;
+  const remainder = value % 100n;
+  return remainder === 0n ? whole.toString() : `${whole}.${remainder.toString().padStart(2, "0")}`;
+}
 
+function assertPositiveAtomAmount(value: string, name: string): void {
+  if (!/^\d+$/.test(value) || BigInt(value) <= 0n) {
+    throw new AppError(500, `${name} must be a positive integer.`);
+  }
+}
+
+function normalizeStarterAddress(raw: unknown): string {
+  const address = typeof raw === "string" ? raw.trim() : "";
+  const lowered = address.toLowerCase();
+
+  if (!address) {
+    throw new AppError(400, "Address is required.");
+  }
+  if (lowered.startsWith("tokenaddr:")) {
+    throw new AppError(400, "Use an ecash: address, not tokenaddr:.");
+  }
+  if (!lowered.startsWith("ecash:")) {
+    throw new AppError(400, "Address must be a valid ecash: address.");
+  }
+  if (!isValidEcashAddress(lowered)) {
+    throw new AppError(400, "Address must be a valid ecash: address.");
+  }
+
+  return lowered;
+}
+
+function cooldownSinceIso(): string {
+  return new Date(Date.now() - config.faucetCooldownDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function dryRunTxid(kind: "xec" | "rmz"): string {
+  return `dryrun-${kind}-${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function starterPackPayload() {
+  const xecSats = config.starterXecSats;
+  assertPositiveAtomAmount(xecSats, "STARTER_XEC_SATS");
+  assertPositiveAtomAmount(config.starterRmzAtoms, "STARTER_RMZ_ATOMS");
+
+  return {
+    xecSats,
+    xec: xecFromSats(xecSats),
+    rmzAtoms: config.starterRmzAtoms
+  };
+}
+
+function starterSuccessResponse(address: string, xecTxid: string, rmzTxid: string) {
+  return {
+    ok: true,
+    address,
+    starterPack: starterPackPayload(),
+    txids: {
+      xec: xecTxid,
+      rmz: rmzTxid
+    },
+    dryRun: config.faucetDryRun,
+    nextSteps: [
+      "Open Tonalli Wallet",
+      "Register your .xec alias",
+      "Verify your identity at https://ecash.mx/identidad"
+    ]
+  };
+}
+
+function sendStarterError(res: { status(code: number): { json(body: unknown): void } }, error: unknown): void {
+  const statusCode = error instanceof AppError ? error.statusCode : 500;
+  const message = error instanceof AppError && error.expose ? error.message : "Internal error";
+  console.error(serverErrorMessage(error));
+  res.status(statusCode).json({ ok: false, error: message });
+}
+
+faucetRouter.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "tonalli-faucet-api",
-    starterPackEnabled: config.faucetEnabled && quickStartCompatible && welcomePayoutValid,
-    quickStartCompatible,
-    welcomePayoutValid,
+    starterPackEnabled: config.faucetEnabled,
     dryRun: config.faucetDryRun,
     turnstileEnabled: config.turnstileEnabled,
-    addressCooldownHours: config.addressCooldownHours,
+    cooldownDays: config.faucetCooldownDays,
     twitterGateEnabled: config.twitterGateEnabled,
     twitterTargetTweetUrl: config.twitterTargetTweetUrl || undefined,
-    starterPack: welcomePayout
+    starterPack: starterPackPayload()
   });
 });
 
 faucetRouter.get("/stats", (_req, res) => {
-  res.json({
-    social: getSocialClaimStats(),
-    legacyStarterPack: getStarterPackStats(),
-    welcome: getWelcomeClaimStats()
-  });
+  res.json(getStarterPackStats());
 });
 
-// POST /starter-pack is owned exclusively by welcomeRouter (one-time Welcome XEC).
-// The legacy XEC+RMZ cooldown pack is intentionally not registered here so the
-// algorithms cannot diverge behind the same path.
+faucetRouter.post("/starter-pack", ipClaimLimiter, addressLimiter, async (req, res, next) => {
+  const now = new Date().toISOString();
+  const ipHash = hashIp(req.ip ?? "unknown");
+  const userAgent = req.get("user-agent") ?? "";
+  let claimId: number | null = null;
+  let xecTxid: string | null = null;
+
+  try {
+    if (!config.faucetEnabled) {
+      throw new AppError(503, "Faucet is temporarily disabled.");
+    }
+
+    const address = normalizeStarterAddress(req.body?.address);
+    const turnstileToken = typeof req.body?.turnstileToken === "string" ? req.body.turnstileToken : undefined;
+    await verifyTurnstileToken(turnstileToken, req.ip);
+
+    const since = cooldownSinceIso();
+    if (getRecentStarterPackClaimByAddress(address, since)) {
+      throw new AppError(429, "Address already received a starter pack recently.");
+    }
+    if (getRecentStarterPackClaimByIpHash(ipHash, since)) {
+      throw new AppError(429, "IP already used for starter pack recently.");
+    }
+
+    const starterPack = starterPackPayload();
+
+    if (config.faucetDryRun) {
+      const dryRunXecTxid = dryRunTxid("xec");
+      const dryRunRmzTxid = dryRunTxid("rmz");
+      insertStarterPackClaim({
+        address,
+        ipHash,
+        userAgent,
+        createdAt: now,
+        xecTxid: dryRunXecTxid,
+        rmzTxid: dryRunRmzTxid,
+        status: "dry_run_completed",
+        dryRun: true
+      });
+      res.json(starterSuccessResponse(address, dryRunXecTxid, dryRunRmzTxid));
+      return;
+    }
+
+    claimId = insertStarterPackClaim({
+      address,
+      ipHash,
+      userAgent,
+      createdAt: now,
+      status: "pending",
+      dryRun: false
+    });
+
+    xecTxid = await sendXecToAddress(address, starterPack.xec);
+    updateStarterPackClaim({ id: claimId, xecTxid, status: "xec_sent" });
+
+    const rmzTxid = await sendRmzToAddress(address, starterPack.rmzAtoms);
+    updateStarterPackClaim({ id: claimId, xecTxid, rmzTxid, status: "completed" });
+
+    res.json(starterSuccessResponse(address, xecTxid, rmzTxid));
+  } catch (error) {
+    if (claimId !== null) {
+      updateStarterPackClaim({ id: claimId, xecTxid, status: "failed" });
+    }
+    if (error instanceof AppError) {
+      sendStarterError(res, error);
+      return;
+    }
+    next(error);
+  }
+});
 
 faucetRouter.post("/claim", ipClaimLimiter, addressLimiter, async (req, res, next) => {
   const now = new Date().toISOString();
